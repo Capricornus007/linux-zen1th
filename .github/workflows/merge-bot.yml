@@ -1,11 +1,11 @@
-name: merge-bot（next ⊕ zen ⊕ xanmod ⊕ bore ⊕ cjktty）
+name: merge-bot（next ⊕ zen ⊕ xanmod ⊕ bore ⊕ cjktty，差量補丁制）
 on:
   schedule:
     - cron: "0 1 * * *"   # 每日 09:00 UTC+8
   workflow_dispatch:
     inputs:
       full_rebuild:
-        description: "重建整合分支（重新合入 zen/xanmod/bore/cjktty）"
+        description: "重建整合分支（重算 zen/xanmod 差量並重打）"
         type: boolean
         default: false
 permissions:
@@ -16,9 +16,7 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: meta
-          fetch-depth: 0
+        with: { path: meta, fetch-depth: 0 }
 
       - name: 整合
         env:
@@ -40,62 +38,92 @@ jobs:
             git fetch --filter=blob:none -q next master:refs/remotes/next/master
             if ! git merge --no-edit -m "merge next $(date -u +%F)" next/master; then
               git diff --name-only --diff-filter=U | tee "$RUNNER_TEMP/conflicts.txt"
-              git merge --abort
-              echo "::error::linux-next 合併衝突"; exit 1
+              git merge --abort; echo "::error::linux-next 合併衝突"; exit 1
             fi
-            # meta 同步：master 上改了 PKGBUILD/config/keep/lsmod/patches 要落到整合分支
             git fetch -q "$GITURL" master:refs/remotes/meta/master
             git checkout -q meta/master -- config ci
             git show meta/master:pkgbuild/PKGBUILD > PKGBUILD
-            git add -A
-            git diff --cached --quiet || git commit -qm "sync meta $(date -u +%F)"
+            git add -A; git diff --cached --quiet || git commit -qm "sync meta $(date -u +%F)"
             git push -f "$GITURL" HEAD:refs/heads/zen1th
+            exit 0
+          fi
+
+          echo "=== 全量：差量補丁制重組 ==="
+          git init -q src; cd src
+          git remote add next   "$NEXTURL"
+          git remote add zen    https://github.com/zen-kernel/zen-kernel.git
+          git remote add xanmod https://gitlab.com/xanmod/linux.git
+          git fetch --filter=blob:none -q next   master:refs/remotes/next/master
+          git fetch --filter=blob:none -q zen    master:refs/remotes/zen/master
+          git fetch --filter=blob:none -q xanmod 7.3:refs/remotes/xanmod/7.3
+          git checkout -q -b zen1th next/master
+
+          # 取各源「最後併入的 stable 標籤提交」＝其差量基準
+          base_of() { # $1=ref  → 輸出 stable 側 parent SHA
+            local h
+            h=$(git log --merges --grep="Merge tag 'v" -1 --format='%H' "$1")
+            [ -n "$h" ] && git rev-parse "${h}^2"
+          }
+          make_netdiff() { # $1=ref $2=輸出檔
+            local b
+            b=$(base_of "$1") || true
+            if [ -z "${b:-}" ]; then
+              echo "找不到 $1 的 stable 錨點（無 Merge tag 提交）"; return 1
+            fi
+            git diff --binary "$b" "$1" -- . ':!Documentation' > "$2"
+            echo "$1 差量：$(wc -l < "$2") 行（基準 ${b:0:12}）"
+          }
+          make_netdiff zen/master    /tmp/zen.diff    || { echo "::error::zen 差量計算失敗"; exit 1; }
+          make_netdiff xanmod/7.3    /tmp/xan.diff    || { echo "::error::xanmod 差量計算失敗"; exit 1; }
+
+          apply_diff() { # $1=檔 $2=名稱
+            if git apply --check --3way "$1" 2>/dev/null; then
+              git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"
+            elif patch -p1 --fuzz=3 -i "$1"; then
+              git add -A && git commit -qm "$2（fuzzy 套用）"
+            else
+              git diff --name-only --diff-filter=U 2>/dev/null | tee -a "$RUNNER_TEMP/conflicts.txt"
+              ls *.rej 2>/dev/null | tee -a "$RUNNER_TEMP/conflicts.txt"
+              git checkout -- .; git clean -fdq
+              echo "::error::$2 差量衝突"; exit 1
+            fi
+          }
+          apply_diff /tmp/zen.diff "zen 優化"
+          apply_diff /tmp/xan.diff "xanmod 優化"
+
+          # BORE：若 zen/xanmod 差量已帶來 SCHED_BORE 就不再疊 CachyOS 補丁（避免重複定義）
+          if grep -q 'SCHED_BORE' zen.diff xan.diff 2>/dev/null || grep -qr 'config SCHED_BORE' kernel/sched/Kconfig kernel/sched/ 2>/dev/null; then
+            echo "SCHED_BORE 已在疊加棧內（lqx/zen 自帶），跳過 CachyOS BORE 補丁"
+            grep -qr 'config SCHED_BORE' kernel/sched/ && git log -1 --format='bore-source: %s' 
           else
-            echo "=== 全量建立整合分支 ==="
-            git init -q src; cd src
-            git remote add next    "$NEXTURL"
-            git remote add zen     https://github.com/zen-kernel/zen-kernel.git
-            git remote add xanmod  https://gitlab.com/xanmod/linux.git
-            git fetch --filter=blob:none -q next   master:refs/remotes/next/master
-            git fetch --filter=blob:none -q zen    master:refs/remotes/zen/master
-            git fetch --filter=blob:none -q xanmod 7.3:refs/remotes/xanmod/7.3
-            git checkout -q -b zen1th next/master
-            for b in zen/master xanmod/7.3; do
-              if ! git merge --no-edit -m "merge $b" "$b"; then
-                git diff --name-only --diff-filter=U | tee -a "$RUNNER_TEMP/conflicts.txt"
-                git merge --abort
-                echo "::error::與 $b 合併衝突"; exit 1
-              fi
-            done
             MAJ=$(grep -m1 '^VERSION' Makefile | sed 's/[^0-9]*//')
             curl -fsSLO "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${MAJ}/sched/0001-bore-cachy.patch"
             patch -Np1 < "0001-bore-cachy.patch" || { echo "::error::CachyOS BORE 補丁衝突"; exit 1; }
-            git add -A; git commit -qm "bore (CachyOS ${MAJ})"
-            CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
-            curl -fsSL -o /tmp/cj1.patch "$CJ/v7.x/cjktty-7.4-rc1.patch"
-            patch -Np1 < /tmp/cj1.patch || { echo "::error::cjktty 補丁衝突"; exit 1; }
-            curl -fsSL -o /tmp/cj2.patch "$CJ/cjktty-add-cjk32x32-font-data.patch"
-            patch -Np1 < /tmp/cj2.patch || { echo "::error::cjktty 字型補丁衝突"; exit 1; }
-            git add -A; git commit -qm "cjktty v7.x"
-            mkdir -p config ci
-            cp ../meta/config/*  config/
-            cp ../meta/ci/*      ci/
-            cp ../meta/pkgbuild/PKGBUILD PKGBUILD
-            git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
-            git push -f "$GITURL" zen1th:refs/heads/zen1th
+            git add -A; git commit -qm "bore（CachyOS ${MAJ}）"
           fi
-          echo "整合分支 tip：$(git -C . rev-parse --short HEAD 2>/dev/null || git -C src rev-parse --short HEAD)"
+
+          CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
+          curl -fsSL -o /tmp/cj1.patch "$CJ/v7.x/cjktty-7.4-rc1.patch"
+          patch -Np1 < /tmp/cj1.patch || { echo "::error::cjktty 補丁衝突"; exit 1; }
+          curl -fsSL -o /tmp/cj2.patch "$CJ/cjktty-add-cjk32x32-font-data.patch"
+          patch -Np1 < /tmp/cj2.patch || { echo "::error::cjktty 字型補丁衝突"; exit 1; }
+          git add -A; git commit -qm "cjktty v7.x"
+
+          mkdir -p config ci
+          cp ../meta/config/* config/; cp ../meta/ci/* ci/
+          cp ../meta/pkgbuild/PKGBUILD PKGBUILD
+          git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
+          git push -f "$GITURL" zen1th:refs/heads/zen1th
 
       - name: 通知 build
         if: success()
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           curl -fsSL -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
             -d '{"event_type":"integration-ready"}'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 衝突清單留檔
         if: failure()
-        run: cat "$RUNNER_TEMP/conflicts.txt" 2>/dev/null || echo "（無衝突清單＝非合併衝突失敗）"
+        run: cat "$RUNNER_TEMP/conflicts.txt" 2>/dev/null || echo "（非合併衝突失敗）"
