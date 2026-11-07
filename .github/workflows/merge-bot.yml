@@ -138,7 +138,26 @@ jobs:
             [ -n "$BLIST" ] || echo "::warning::BORE 官方確無 $KVER 補丁（列表已抓、無匹配檔）" 
             if [ -n "$BLIST" ]; then
               curl -fsSLO "https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches/testing/${BLIST}"
-              patch -Np1 < "$BLIST" || { echo "::error::BORE 官方補丁（$BLIST）衝突"; exit 1; }
+              if git apply --check --3way "$BLIST" 2>/dev/null; then
+                git apply --3way "$BLIST"
+              elif patch -Np1 --dry-run < "$BLIST" >/dev/null 2>&1; then
+                patch -Np1 < "$BLIST"
+              else
+                # xanmod best-effort 層改過 fair.c 等檔案的上下文（run #9：官方對 vanilla
+                # 7.4-rc1 的 patch 卡 fair.c hunk#2）。git apply --3way 衝突會把 marker
+                # 寫進檔案，故任一檔衝突→那些檔案先 checkout 回 next 原版再 3way 重套
+                # （xanmod 對該檔的 sauce 丟棄，衝突清單已另存 zen1th-conflicts 分支）。
+                echo "BORE 官方 patch 直套失敗，改用 git 3way…"
+                git apply --3way "$BLIST" 2>/dev/null
+                if git diff --name-only --diff-filter=U | grep -q .; then
+                  for f in $(git diff --name-only --diff-filter=U); do
+                    echo "3way 衝突檔（checkout 回 next 原版後重套該檔）：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
+                  done
+                  git diff --name-only --diff-filter=U | xargs -r git checkout next/master --
+                  git apply --3way "$BLIST"
+                  git diff --name-only --diff-filter=U | grep -q . && { echo "::error::BORE 3way 仍衝突"; exit 1; }
+                fi
+              fi
               git add -A; git commit -qm "bore（BORE 官方 $BLIST）"
             else
               echo "::warning::BORE 官方尚無 $KVER 的補丁,退回 CachyOS 目錄版"
