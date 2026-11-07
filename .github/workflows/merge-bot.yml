@@ -170,10 +170,12 @@ jobs:
           apply_diff /tmp/xan.diff "xanmod 優化" no
 
           CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
+          # v7.x/cjktty-7.4-rc1.patch（57MB）已內含 32x32 CJK 字型資料與 fonts.c/Makefile/Kconfig
+          # 全部段（run #14 實測：再套舊的 cjktty-add-cjk32x32-font-data.patch 會
+          # 「Reversed (or previously applied)」生 .rej 紅燈）——cj2 步驟刪除。
           curl -fsSL -o /tmp/cj1.patch "$CJ/v7.x/cjktty-7.4-rc1.patch"
+          test "$(wc -c < /tmp/cj1.patch)" -gt 50000000 || { echo "::error::cjktty 補丁下載不完整"; exit 1; }
           patch -Np1 < /tmp/cj1.patch || { echo "::error::cjktty 補丁衝突"; exit 1; }
-          curl -fsSL -o /tmp/cj2.patch "$CJ/cjktty-add-cjk32x32-font-data.patch"
-          patch -Np1 < /tmp/cj2.patch || { echo "::error::cjktty 字型補丁衝突"; exit 1; }
           git add -A; git commit -qm "cjktty v7.x"
 
           mkdir -p config ci
