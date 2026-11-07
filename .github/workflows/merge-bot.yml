@@ -3,11 +3,6 @@ on:
   schedule:
     - cron: "0 1 * * *"   # 每日 09:00 UTC+8
   workflow_dispatch:
-    inputs:
-      full_rebuild:
-        description: "重建整合分支（重算 zen/xanmod 差量並重打）"
-        type: boolean
-        default: false
 permissions:
   contents: write
 jobs:
@@ -20,7 +15,6 @@ jobs:
 
       - name: 整合
         env:
-          FULL: ${{ inputs.full_rebuild }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
@@ -30,23 +24,8 @@ jobs:
           GITURL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           NEXTURL="https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git"
           cd meta
-          if git ls-remote --exit-code --heads "$GITURL" zen1th >/dev/null 2>&1 && [ "$FULL" != "true" ]; then
-            echo "=== 增量：整合分支 ← next 尖端 ==="
-            git fetch -q "$GITURL" zen1th
-            git checkout -q -b zen1th FETCH_HEAD
-            git remote add next "$NEXTURL"
-            git fetch --filter=blob:none -q next master:refs/remotes/next/master
-            if ! git merge --no-edit -m "merge next $(date -u +%F)" next/master; then
-              git diff --name-only --diff-filter=U | tee "$RUNNER_TEMP/conflicts.txt"
-              git merge --abort; echo "::error::linux-next 合併衝突"; exit 1
-            fi
-            git fetch -q "$GITURL" master:refs/remotes/meta/master
-            git checkout -q meta/master -- config ci
-            git show meta/master:pkgbuild/PKGBUILD > PKGBUILD
-            git add -A; git diff --cached --quiet || git commit -qm "sync meta $(date -u +%F)"
-            git push -f "$GITURL" HEAD:refs/heads/zen1th
-            exit 0
-          fi
+          # （旧的「增量：整合分支←next 尖端」路徑已刪除——zen1th 現在是無上游歷史的
+          #   單提交快照分支，沒有共同祖先可 merge；且全量重組只要 ~10 分鐘，每日全量。）
 
           echo "=== 全量：差量補丁制重組 ==="
           git init -q src; cd src
@@ -194,19 +173,39 @@ jobs:
           cp ../config/* config/; cp ../ci/* ci/
           cp ../pkgbuild/PKGBUILD PKGBUILD
           git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
-          # run #18：全量重組的 zen1th push 要送「遠端缺的 next 歷史＋57MB 字型 blob」
-          # 的大包，HTTPS 後端回 HTTP 500 斷線。加大 postBuffer、走 HTTP/1.1、重試三次；
-          # 本 step 沒有 set -e，push 失敗不収口就會「假成功」通知 build（#18 就是
-          # push 炸了還繼續往下跑），所以重試全敗必紅。
-          git config http.postBuffer 1048576000
+          # ===== zen1th 推「無上游歷史的單提交快照」=====
+          # run #16–#19 四連紅實證：把 270 萬 commit 的 next 史＋整棵樹一次送進
+          # GitHub HTTP 後端必 500（unpack 階段的後端限制，postBuffer/HTTP1.1/
+          # 重試/分段/blob 分離全數無效）。zen1th 的消費者只有 build.yml 的
+          # `git clone --branch zen1th`＋makepkg，它要的是「樹」不是上游歷史——
+          # 所以把整合結果壓成單提交（父=上一個快照，讓 build 端 clone 增量最小、
+          # 歷史上限 30 個提交可回滾），樹裡再放 .scm_version 記錄真實 next commit。
+          NEXTSHA=$(git rev-parse next/master)
+          git rm -q --cached .scm_version 2>/dev/null || true
+          echo "$NEXTSHA" > .scm_version
+          git add -A; git commit -qm "zen1th snapshot $(date -u +%F) next=${NEXTSHA:0:12}" || true
+          TREE=$(git rev-parse 'zen1th^{tree}')
+          PARENT=$(git ls-remote "$GITURL" refs/heads/zen1th | awk '{print $1}')
+          if [ -n "$PARENT" ] && ! git cat-file -e "$PARENT" 2>/dev/null; then
+            git fetch -q "$GITURL" "refs/heads/zen1th:refs/remotes/prev/zen1th" && PARENT=$(git rev-parse refs/remotes/prev/zen1th)
+          fi
+          SNAP=$(git commit-tree "$TREE" ${PARENT:+-p "$PARENT"} -m "zen1th integration $(date -u +%F) next=${NEXTSHA:0:12} bore+cjktty zen xanmod(best-effort)")
+          # 父鏈上限 30 個快照：超過就從樹重開根提交（build 端 clone 体积有上界）。
+          if [ -n "$PARENT" ]; then
+            N=$(git rev-list --count "$PARENT" 2>/dev/null || echo 0)
+            if [ "$N" -ge 30 ]; then
+              SNAP=$(git commit-tree "$TREE" -m "zen1th integration $(date -u +%F) next=${NEXTSHA:0:12} bore+cjktty zen xanmod(best-effort)（父鏈滿 30 重開）")
+            fi
+          fi
+          git update-ref refs/heads/zen1th "$SNAP"
           git config http.version HTTP/1.1
           PUSH_OK=0
           for TRY in 1 2 3; do
-            git -c http.postBuffer=1048576000 -c http.version=HTTP/1.1 \
-                push -f "$GITURL" zen1th:refs/heads/zen1th && { PUSH_OK=1; break; }
-            echo "::warning::zen1th push 第 $TRY 次失敗，20 秒後重試"; sleep 20
+            git push -f "$GITURL" "zen1th:refs/heads/zen1th" && { PUSH_OK=1; break; }
+            echo "::warning::zen1th 快照 push 第 $TRY 次失敗，30 秒後重試"; sleep 30
           done
-          [ "$PUSH_OK" = 1 ] || { echo "::error::zen1th push 三次全失敗（大封包被 HTTPS 後端拒收？）"; exit 1; }
+          [ "$PUSH_OK" = 1 ] || { echo "::error::zen1th 快照 push 三次全失敗"; exit 1; }
+          echo "zen1th 快照 = ${SNAP:0:12}（父 ${PARENT:+${PARENT:0:12}}，樹含 meta；上游歷史不入库）"
 
       - name: 通知 build
         if: success()

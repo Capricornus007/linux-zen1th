@@ -24,11 +24,13 @@ _srcname=linux-zen1th
 
 pkgver() {
   cd "$srcdir/$_srcname"
-  local d
-  d=$(git describe --tags --abbrev=9 2>/dev/null | sed -E 's/^v//; s/-/./g; s/([A-Za-z])[A-Za-z.]*/\L\1/g' || true)
-  if [ -n "$d" ]; then echo "$d"; else
-    printf '%s.r%s.g%s' "$(make -s kernelversion)" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-  fi
+  # zen1th 是無上游歷史的快照分支（見 merge-bot.yml：整包推 next 史會 500），
+  # describe/rev-list --count 都失去意義。版本用「核心版本.r<UTC日期>.g<快照sha>」：
+  # 每日構建自然遞增、跨快照鏈重開也單調，pacman 升級排序安全。
+  # .scm_version 存整合時的真實 next commit（追溯用，不進版本號）。
+  local kv
+  kv=$(make -s kernelversion)
+  printf '%s.r%s.g%s' "$kv" "$(date -u +%Y%m%d)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
