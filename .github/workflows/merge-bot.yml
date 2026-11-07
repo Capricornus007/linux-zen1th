@@ -194,7 +194,19 @@ jobs:
           cp ../config/* config/; cp ../ci/* ci/
           cp ../pkgbuild/PKGBUILD PKGBUILD
           git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
-          git push -f "$GITURL" zen1th:refs/heads/zen1th
+          # run #18：全量重組的 zen1th push 要送「遠端缺的 next 歷史＋57MB 字型 blob」
+          # 的大包，HTTPS 後端回 HTTP 500 斷線。加大 postBuffer、走 HTTP/1.1、重試三次；
+          # 本 step 沒有 set -e，push 失敗不収口就會「假成功」通知 build（#18 就是
+          # push 炸了還繼續往下跑），所以重試全敗必紅。
+          git config http.postBuffer 1048576000
+          git config http.version HTTP/1.1
+          PUSH_OK=0
+          for TRY in 1 2 3; do
+            git -c http.postBuffer=1048576000 -c http.version=HTTP/1.1 \
+                push -f "$GITURL" zen1th:refs/heads/zen1th && { PUSH_OK=1; break; }
+            echo "::warning::zen1th push 第 $TRY 次失敗，20 秒後重試"; sleep 20
+          done
+          [ "$PUSH_OK" = 1 ] || { echo "::error::zen1th push 三次全失敗（大封包被 HTTPS 後端拒收？）"; exit 1; }
 
       - name: 通知 build
         if: success()
