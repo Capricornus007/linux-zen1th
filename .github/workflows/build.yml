@@ -18,8 +18,13 @@ jobs:
           pacman -Syu --noconfirm --needed base-devel git bc flex bison openssl python perl rsync cpio zstd libtraceevent pahole
           useradd -m builder
       - name: 取整合分支
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
-          git clone -q --branch zen1th "https://github.com/${GITHUB_REPOSITORY}.git" /home/builder/src
+          # 倉是 private：匿名 clone 會要憑證（run 42419179952 實測 exit 128）。
+          # clone 一次到 runner 本體（root），換 builder 擁有後再進容器看不到——
+          # 這個 step 與 makepkg 同 job 但 container 全域，直接帶 token clone。
+          git clone -q --branch zen1th "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /home/builder/src
+          git -C /home/builder/src remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           chown -R builder:builder /home/builder/src
       - name: makepkg
         run: |
