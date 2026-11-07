@@ -129,7 +129,13 @@ jobs:
             # （run 42398532726：官方對 7.4-rc1 的 7.0.1 已合入 next 基座上下文）。
             # kernelversion 對 rc 會多出 .0（7.4.0-rc1）；BORE 官方檔名用 7.4-rc1——去 .0
             KVER=$(make -s kernelversion | sed -E 's/^([0-9]+\.[0-9]+)\.0(-|$)/\1\2/')
-            BLIST=$(curl -fsSL "https://api.github.com/repos/firelzrd/bore-scheduler/contents/patches/testing" | jq -r '.[].name' | grep -E "^0001-linux${KVER}(-rc[0-9]+)?-bore-" | sort -V | tail -1 || true)
+            # 匿名 api.github.com 在 runner 上會 403 rate-limit（失敗曾被 || true 吞掉、
+            # 誤報「官方尚無補丁」）——帶 GITHUB_TOKEN，且 API 失敗直接紅、不靜默退回。
+            BLIST_JSON=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              "https://api.github.com/repos/firelzrd/bore-scheduler/contents/patches/testing") \
+              || { echo "::error::bore-scheduler 檔列表 API 請求失敗"; exit 1; }
+            BLIST=$(printf '%s' "$BLIST_JSON" | jq -r '.[].name' | grep -E "^0001-linux${KVER}(-rc[0-9]+)?-bore-" | sort -V | tail -1 || true)
+            [ -n "$BLIST" ] || echo "::warning::BORE 官方確無 $KVER 補丁（列表已抓、無匹配檔）" 
             if [ -n "$BLIST" ]; then
               curl -fsSLO "https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches/testing/${BLIST}"
               patch -Np1 < "$BLIST" || { echo "::error::BORE 官方補丁（$BLIST）衝突"; exit 1; }
