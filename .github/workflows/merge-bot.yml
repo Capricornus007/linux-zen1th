@@ -54,8 +54,8 @@ jobs:
           git remote add zen    https://github.com/zen-kernel/zen-kernel.git
           git remote add xanmod https://gitlab.com/xanmod/linux.git
           git fetch --filter=blob:none -q next   master:refs/remotes/next/master
-          git fetch --filter=blob:none -q zen    master:refs/remotes/zen/master
-          git fetch --filter=blob:none -q xanmod 7.3:refs/remotes/xanmod/7.3
+          git fetch -q zen    master:refs/remotes/zen/master
+          git fetch -q xanmod 7.3:refs/remotes/xanmod/7.3
           git checkout -q -b zen1th next/master
 
           # 取各源「最後併入的 stable 標籤提交」＝其差量基準
