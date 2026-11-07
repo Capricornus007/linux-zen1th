@@ -148,7 +148,8 @@ jobs:
                 # 寫進檔案，故任一檔衝突→那些檔案先 checkout 回 next 原版再 3way 重套
                 # （xanmod 對該檔的 sauce 丟棄，衝突清單已另存 zen1th-conflicts 分支）。
                 echo "BORE 官方 patch 直套失敗，改用 git 3way…"
-                git apply --3way "$BLIST" 2>/dev/null
+                # run: 是 bash -e：--3way 遇衝突 rc!=0，不吞掉會直接死在本行、到不了 checkout
+                git apply --3way "$BLIST" 2>/dev/null || true
                 if git diff --name-only --diff-filter=U | grep -q .; then
                   for f in $(git diff --name-only --diff-filter=U); do
                     echo "3way 衝突檔（checkout 回 next 原版後重套該檔）：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
