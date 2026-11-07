@@ -100,7 +100,10 @@ jobs:
                 n_apply=$((n_apply+1))
               else
                 n_fail=$((n_fail+1)); ok=0
-                echo "$2 衝突檔：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
+                # git apply --3way 失敗會把 <<<<<<< 衝突標記留檔並 stage（rc!=0 不清場）。
+                # 不清掉的話標記會被 commit 進整合分支→編譯必炸。回退到本層起點：
+                git checkout HEAD -- "$f" 2>/dev/null || git restore --source=HEAD --staged --worktree -- "$f"
+                echo "$2 衝突檔（已回退保留基座版）：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
               fi
             done < /tmp/files.txt
             echo "$2：套用 $n_apply 檔、衝突 $n_fail 檔"
