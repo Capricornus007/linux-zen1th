@@ -189,8 +189,10 @@ jobs:
           git add -A; git commit -qm "cjktty v7.x"
 
           mkdir -p config ci
-          cp ../meta/config/* config/; cp ../meta/ci/* ci/
-          cp ../meta/pkgbuild/PKGBUILD PKGBUILD
+          # cwd 是 meta/src（checkout 到 meta 後才 git init src），上層就是 meta 本身；
+          # 寫 ../meta 會解析成 meta/meta——run #17 就是在這 cp 失敗。
+          cp ../config/* config/; cp ../ci/* ci/
+          cp ../pkgbuild/PKGBUILD PKGBUILD
           git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
           git push -f "$GITURL" zen1th:refs/heads/zen1th
 
