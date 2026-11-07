@@ -126,4 +126,15 @@ jobs:
 
       - name: 衝突清單留檔
         if: failure()
-        run: cat "$RUNNER_TEMP/conflicts.txt" 2>/dev/null || echo "（非合併衝突失敗）"
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          GITURL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          test -f "$RUNNER_TEMP/conflicts.txt" || echo "（非合併衝突失敗，見日誌）" > "$RUNNER_TEMP/conflicts.txt"
+          cat "$RUNNER_TEMP/conflicts.txt"
+          git init -q conf && cd conf
+          git remote add origin "$GITURL"
+          git fetch -q origin zen1th-conflicts 2>/dev/null && git checkout -q -b zen1th-conflicts origin/zen1th-conflicts || git checkout -q -b zen1th-conflicts
+          cp "$RUNNER_TEMP/conflicts.txt" "conflicts-$(date -u +%Y%m%dT%H%M%SZ).txt"
+          ln -sf "conflicts-$(date -u +%Y%m%dT%H%M%SZ).txt" conflicts-latest.txt
+          git add -A; git commit -qm "conflicts $(date -u +%F)" || true
+          git push -f origin zen1th-conflicts:zen1th-conflicts
