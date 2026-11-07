@@ -1,0 +1,7 @@
+What:		/sys/class/leds/<led>/shot
+Date:		Jun 2012
+KernelVersion:	3.6
+Contact:	linux-leds@vger.kernel.org
+Description:
+		Write any non-empty string to signal an events, this starts a
+		blink sequence if not already running.

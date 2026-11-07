@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Device Tree Source AST2700 EVB
+ *
+ * Copyright (C) 2026 ASPEED Technology Inc.
+ */
+
+/dts-v1/;
+#include "aspeed-g7-a35.dtsi"
+
+/ {
+	model = "AST2700 EVB";
+	compatible = "aspeed,ast2700-evb", "aspeed,ast2700";
+
+	aliases {
+		serial0 = &uart12;	/* console port */
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@400000000 {
+		device_type = "memory";
+		reg = <0x4 0x00000000 0x0 0x40000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ssp_memory: ssp-memory@42c000000 {
+			reg = <0x4 0x2c000000 0x0 0x2000000>;
+			no-map;
+		};
+
+		tsp_memory: tsp-memory@42e000000 {
+			reg = <0x4 0x2e000000 0x0 0x2000000>;
+			no-map;
+		};
+
+		ipc_ssp_share: ipc-ssp-share@431080000 {
+			reg = <0x4 0x31080000 0x0 0x800000>;
+			no-map;
+		};
+
+		ipc_bootmcu_share: ipc-bootmcu-share@431880000 {
+			reg = <0x4 0x31880000 0x0 0x2b0000>;
+			no-map;
+		};
+
+		vbios_base0: vbios-base0@431bb0000 {
+			reg = <0x4 0x31bb0000 0x0 0x10000>;
+			no-map;
+		};
+
+		vbios_base1: vbios-base1@431bc0000 {
+			reg = <0x4 0x31bc0000 0x0 0x10000>;
+			no-map;
+		};
+	};
+};
+
+&fmc {
+	status = "okay";
+	pinctrl-0 = <&pinctrl_fwspi_quad_default>;
+	pinctrl-names = "default";
+
+	flash@0 {
+		status = "okay";
+		m25p,fast-read;
+		label = "bmc";
+		spi-max-frequency = <50000000>;
+		spi-tx-bus-width = <4>;
+		spi-rx-bus-width = <4>;
+#include "aspeed-evb-flash-layout-128.dtsi"
+	};
+
+	flash@1 {
+		status = "okay";
+		m25p,fast-read;
+		label = "fmc0:1";
+		spi-max-frequency = <50000000>;
+		spi-tx-bus-width = <4>;
+		spi-rx-bus-width = <4>;
+	};
+
+	flash@2 {
+		status = "disabled";
+		m25p,fast-read;
+		label = "fmc0:2";
+		spi-max-frequency = <50000000>;
+		spi-tx-bus-width = <4>;
+		spi-rx-bus-width = <4>;
+	};
+};
+
+&uart12 {
+	status = "okay";
+};
