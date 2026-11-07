@@ -102,7 +102,14 @@ jobs:
                 n_fail=$((n_fail+1)); ok=0
                 # git apply --3way 失敗會把 <<<<<<< 衝突標記留檔並 stage（rc!=0 不清場）。
                 # 不清掉的話標記會被 commit 進整合分支→編譯必炸。回退到本層起點：
-                git checkout HEAD -- "$f" 2>/dev/null || git restore --source=HEAD --staged --worktree -- "$f"
+                # HEAD 有這檔→checkout 還原；HEAD 沒有（diff 想新增、但上游早已把該檔
+                # 搬走,如 drivers/android/binder.c→binder/,run #16）→清掉新增檔案。
+                if git cat-file -e "HEAD:$f" 2>/dev/null; then
+                  git checkout HEAD -- "$f"
+                else
+                  git rm -q -f --cached -- "$f" 2>/dev/null || true
+                  rm -f "$f"
+                fi
                 echo "$2 衝突檔（已回退保留基座版）：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
               fi
             done < /tmp/files.txt
