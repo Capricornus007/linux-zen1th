@@ -1,0 +1,3 @@
+CREDITS.rej
+MAINTAINERS.rej
+Makefile.rej
