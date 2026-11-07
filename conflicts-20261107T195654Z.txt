@@ -1,0 +1,2 @@
+xanmod 優化 衝突檔（已回退保留基座版）：drivers/android/Kconfig
+xanmod 優化 衝突檔（已回退保留基座版）：drivers/android/Makefile
