@@ -112,13 +112,6 @@ jobs:
               echo "::warning::$2 有 $n_fail 個衝突檔未套用（best-effort 層；清單見 zen1th-conflicts 分支）"
             fi
           }
-          # zen：merge-base 修法後其差量≈0（zen 已無自有 sauce）；真出現 sauce 衝突要紅，
-          #      因為 zen 的 scheduler/MM sauce 是用戶點名要的。
-          apply_diff /tmp/zen.diff "zen 優化" yes
-          # xanmod：官方跟 stable 走、沒有 7.4/rc 分支，sauce 對 next 基座必然漂移
-          #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
-          apply_diff /tmp/xan.diff "xanmod 優化" no
-
           # BORE：若 zen/xanmod 差量已帶來 SCHED_BORE 就不再疊 CachyOS 補丁（避免重複定義）
           if grep -q 'SCHED_BORE' zen.diff xan.diff 2>/dev/null || grep -qr 'config SCHED_BORE' kernel/sched/Kconfig kernel/sched/ 2>/dev/null; then
             echo "SCHED_BORE 已在疊加棧內（lqx/zen 自帶），跳過 CachyOS BORE 補丁"
@@ -168,6 +161,13 @@ jobs:
               git add -A; git commit -qm "bore（CachyOS ${MAJ}）"
             fi
           fi
+
+          # zen：merge-base 修法後其差量≈0（zen 已無自有 sauce）；真出現 sauce 衝突要紅，
+          #      因為 zen 的 scheduler/MM sauce 是用戶點名要的。
+          apply_diff /tmp/zen.diff "zen 優化" yes
+          # xanmod：官方跟 stable 走、沒有 7.4/rc 分支，sauce 對 next 基座必然漂移
+          #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
+          apply_diff /tmp/xan.diff "xanmod 優化" no
 
           CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
           curl -fsSL -o /tmp/cj1.patch "$CJ/v7.x/cjktty-7.4-rc1.patch"
