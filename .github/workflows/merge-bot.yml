@@ -84,7 +84,10 @@ jobs:
           make_netdiff zen/master     lin/master            /tmp/zen.diff || { echo "::error::zen 差量計算失敗"; exit 1; }
           make_netdiff xanmod/7.3     stable/linux-7.3.y    /tmp/xan.diff || { echo "::error::xanmod 差量計算失敗"; exit 1; }
 
-          apply_diff() { # $1=檔 $2=名稱 —— 三級：3way整檔 → 逐檔3way → --reject 保可救的
+          apply_diff() { # $1=檔 $2=名稱 $3=required(yes/no)
+            # yes：任一衝突即紅（缺了會開不了機/丟特性）。
+            # no ：最佳努力層（第三方 sauce 對 next 基座必然漂移）——能套的全套，
+            #      衝突檔記清單＋::warning:: 後繼續；清單照常推 zen1th-conflicts 分支。
             if [ ! -s "$1" ]; then echo "$2：差量為空（fork 無自有修改），跳過"; return 0; fi
             if git apply --check --3way "$1" 2>/dev/null; then
               git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"; return
@@ -103,11 +106,18 @@ jobs:
             echo "$2：套用 $n_apply 檔、衝突 $n_fail 檔"
             git add -A; git commit -qm "$2（逐檔套用 $n_apply 檔）" || true
             if [ "$ok" = 0 ]; then
-              echo "::error::$2 有 $n_fail 個衝突檔（清單見 zen1th-conflicts 分支）"; exit 1
+              if [ "$3" = yes ]; then
+                echo "::error::$2 有 $n_fail 個衝突檔（清單見 zen1th-conflicts 分支）"; exit 1
+              fi
+              echo "::warning::$2 有 $n_fail 個衝突檔未套用（best-effort 層；清單見 zen1th-conflicts 分支）"
             fi
           }
-          apply_diff /tmp/zen.diff "zen 優化"
-          apply_diff /tmp/xan.diff "xanmod 優化"
+          # zen：merge-base 修法後其差量≈0（zen 已無自有 sauce）；真出現 sauce 衝突要紅，
+          #      因為 zen 的 scheduler/MM sauce 是用戶點名要的。
+          apply_diff /tmp/zen.diff "zen 優化" yes
+          # xanmod：官方跟 stable 走、沒有 7.4/rc 分支，sauce 對 next 基座必然漂移
+          #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
+          apply_diff /tmp/xan.diff "xanmod 優化" no
 
           # BORE：若 zen/xanmod 差量已帶來 SCHED_BORE 就不再疊 CachyOS 補丁（避免重複定義）
           if grep -q 'SCHED_BORE' zen.diff xan.diff 2>/dev/null || grep -qr 'config SCHED_BORE' kernel/sched/Kconfig kernel/sched/ 2>/dev/null; then
