@@ -70,22 +70,38 @@ jobs:
             if [ -z "${b:-}" ]; then
               echo "找不到 $1 的 stable 錨點（無 Merge tag 提交）"; return 1
             fi
-            git diff --binary "$b" "$1" -- . ':!Documentation' > "$2"
-            echo "$1 差量：$(wc -l < "$2") 行（基準 ${b:0:12}）"
+            # 排除：文書、純裝飾檔（CREDITS/MAINTAINERS 署名）、頂層 Makefile（版本號裝飾，
+            # 版本由 next 基座決定）；保留 arch/x86/Makefile 等真編譯改動
+            git diff --binary "$b" "$1" -- . \
+              ':!Documentation' ':!CREDITS' ':!MAINTAINERS' ':!Makefile' \
+              ':!LICENSES' ':!README' > "$2"
+            echo "$1 差量：$(wc -l < "$2") 行（基準 ${b:0:12}，已排除裝飾檔）"
           }
           make_netdiff zen/master    /tmp/zen.diff    || { echo "::error::zen 差量計算失敗"; exit 1; }
           make_netdiff xanmod/7.3    /tmp/xan.diff    || { echo "::error::xanmod 差量計算失敗"; exit 1; }
 
-          apply_diff() { # $1=檔 $2=名稱
+          apply_diff() { # $1=檔 $2=名稱 —— 三級：3way整檔 → 逐檔3way → --reject 保可救的
             if git apply --check --3way "$1" 2>/dev/null; then
-              git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"
-            elif patch -p1 --fuzz=3 -i "$1"; then
-              git add -A && git commit -qm "$2（fuzzy 套用）"
-            else
-              git diff --name-only --diff-filter=U 2>/dev/null | tee -a "$RUNNER_TEMP/conflicts.txt"
-              ls *.rej 2>/dev/null | tee -a "$RUNNER_TEMP/conflicts.txt"
-              git checkout -- .; git clean -fdq
-              echo "::error::$2 差量衝突"; exit 1
+              git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"; return
+            fi
+            echo "$2：整檔 3way 不行，逐檔套用…"
+            local f ok=1
+            # 用 --numstat 取檔案清單，逐檔 3way（一檔失敗不拖垮其他檔）
+            git apply --numstat "$1" 2>/dev/null | cut -f3 | while IFS= read -r f; do
+              git diff --binary "$1" -- "$f" > /tmp/one.diff 2>/dev/null || continue
+            done
+            # 上面管道在 subshell，改 here 正式逐檔：
+            git apply --numstat "$1" | cut -f3 > /tmp/files.txt
+            while IFS= read -r f; do
+              git diff --binary "$(git merge-base HEAD "${3:-HEAD}")" HEAD -- "$f" >/dev/null 2>&1 || true
+              if git apply --3way --include="$f" "$1" 2>/dev/null; then :; else
+                echo "單檔失敗：$f"; ok=0
+                printf '%s\n' "$f" >> "$RUNNER_TEMP/conflicts.txt"
+              fi
+            done < /tmp/files.txt
+            git add -A; git commit -qm "$2（逐檔套用，失敗清單見 conflicts）" || true
+            if [ "$ok" = 0 ]; then
+              echo "::error::$2 有檔案級衝突（其餘已套用）"; exit 1
             fi
           }
           apply_diff /tmp/zen.diff "zen 優化"
