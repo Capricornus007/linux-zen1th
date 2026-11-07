@@ -128,7 +128,7 @@ jobs:
             # 正式檔；CachyOS 目錄版滯後半個週期,對 next 基座會 fair.c 衝突
             # （run 42398532726：官方對 7.4-rc1 的 7.0.1 已合入 next 基座上下文）。
             # kernelversion 對 rc 會多出 .0（7.4.0-rc1）；BORE 官方檔名用 7.4-rc1——去 .0
-            KVER=$(make -s kernelversion | sed -E 's/^([0-9]+)\.0(-|$)/\1\2/')
+            KVER=$(make -s kernelversion | sed -E 's/^([0-9]+\.[0-9]+)\.0(-|$)/\1\2/')
             BLIST=$(curl -fsSL "https://api.github.com/repos/firelzrd/bore-scheduler/contents/patches/testing" | jq -r '.[].name' | grep -E "^0001-linux${KVER}(-rc[0-9]+)?-bore-" | sort -V | tail -1 || true)
             if [ -n "$BLIST" ]; then
               curl -fsSLO "https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches/testing/${BLIST}"
