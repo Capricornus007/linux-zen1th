@@ -53,34 +53,39 @@ jobs:
           git remote add next   "$NEXTURL"
           git remote add zen    https://github.com/zen-kernel/zen-kernel.git
           git remote add xanmod https://gitlab.com/xanmod/linux.git
-          git fetch --filter=blob:none -q next   master:refs/remotes/next/master
+          git remote add lin    https://github.com/torvalds/linux.git
+          git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+          git fetch --filter=blob:none -q next    master:refs/remotes/next/master
+          git fetch --filter=blob:none -q lin     master:refs/remotes/lin/master
+          git fetch --filter=blob:none -q stable  linux-7.3.y:refs/remotes/stable/linux-7.3.y
           git fetch -q zen    master:refs/remotes/zen/master
           git fetch -q xanmod 7.3:refs/remotes/xanmod/7.3
           git checkout -q -b zen1th next/master
 
-          # 取各源「最後併入的 stable 標籤提交」＝其差量基準
-          base_of() { # $1=ref  → 輸出 stable 側 parent SHA
-            local h
-            h=$(git log --merges --grep="Merge tag 'v" -1 --format='%H' "$1")
-            [ -n "$h" ] && git rev-parse "${h}^2"
-          }
-          make_netdiff() { # $1=ref $2=輸出檔
+          # 差量基準＝ fork 與權威錨分支的 merge-base。
+          # 教訓（run 42388018642）：用「最後一個 Merge tag 'v…」當錨點對 zen 完全失效——
+          # zen master 已整個重基到 vanilla 7.4-rc1（樹內全是 Linus 自己的 merge tag），
+          # grep 會錨到一年前的舊標籤，差量變成「14 個月全部 stable」，逐檔套用 857 衝突。
+          # merge-base 對「跟 Linus 走（無 sauce）」回空差量、對「已疊 sauce」回淨 sauce，
+          # 兩種情況都正確。
+          make_netdiff() { # $1=fork-ref $2=anchor-ref $3=輸出檔
             local b
-            b=$(base_of "$1") || true
-            if [ -z "${b:-}" ]; then
-              echo "找不到 $1 的 stable 錨點（無 Merge tag 提交）"; return 1
+            b=$(git merge-base "$1" "$2" 2>/dev/null) || b=""
+            if [ -z "$b" ]; then
+              echo "$1 與 $2 無共同歷史（merge-base 失敗）"; return 1
             fi
             # 排除：文書、純裝飾檔（CREDITS/MAINTAINERS 署名）、頂層 Makefile（版本號裝飾，
             # 版本由 next 基座決定）；保留 arch/x86/Makefile 等真編譯改動
             git diff --binary "$b" "$1" -- . \
               ':!Documentation' ':!CREDITS' ':!MAINTAINERS' ':!Makefile' \
-              ':!LICENSES' ':!README' > "$2"
-            echo "$1 差量：$(wc -l < "$2") 行（基準 ${b:0:12}，已排除裝飾檔）"
+              ':!LICENSES' ':!README' > "$3"
+            echo "$1 差量：$(wc -l < "$3") 行（基準 ${b:0:12} ＝ merge-base($2)，已排除裝飾檔）"
           }
-          make_netdiff zen/master    /tmp/zen.diff    || { echo "::error::zen 差量計算失敗"; exit 1; }
-          make_netdiff xanmod/7.3    /tmp/xan.diff    || { echo "::error::xanmod 差量計算失敗"; exit 1; }
+          make_netdiff zen/master     lin/master            /tmp/zen.diff || { echo "::error::zen 差量計算失敗"; exit 1; }
+          make_netdiff xanmod/7.3     stable/linux-7.3.y    /tmp/xan.diff || { echo "::error::xanmod 差量計算失敗"; exit 1; }
 
           apply_diff() { # $1=檔 $2=名稱 —— 三級：3way整檔 → 逐檔3way → --reject 保可救的
+            if [ ! -s "$1" ]; then echo "$2：差量為空（fork 無自有修改），跳過"; return 0; fi
             if git apply --check --3way "$1" 2>/dev/null; then
               git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"; return
             fi
@@ -109,7 +114,7 @@ jobs:
             echo "SCHED_BORE 已在疊加棧內（lqx/zen 自帶），跳過 CachyOS BORE 補丁"
             grep -qr 'config SCHED_BORE' kernel/sched/ && git log -1 --format='bore-source: %s' 
           else
-            MAJ=$(grep -m1 '^VERSION' Makefile | sed 's/[^0-9]*//')
+            MAJ=$(awk '/^VERSION/{v=$3}/^PATCHLEVEL/{p=$3}END{print v"."p}' Makefile)
             curl -fsSLO "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${MAJ}/sched/0001-bore-cachy.patch"
             patch -Np1 < "0001-bore-cachy.patch" || { echo "::error::CachyOS BORE 補丁衝突"; exit 1; }
             git add -A; git commit -qm "bore（CachyOS ${MAJ}）"
