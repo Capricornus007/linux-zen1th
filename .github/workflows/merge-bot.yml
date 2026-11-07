@@ -85,23 +85,20 @@ jobs:
               git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"; return
             fi
             echo "$2：整檔 3way 不行，逐檔套用…"
-            local f ok=1
-            # 用 --numstat 取檔案清單，逐檔 3way（一檔失敗不拖垮其他檔）
-            git apply --numstat "$1" 2>/dev/null | cut -f3 | while IFS= read -r f; do
-              git diff --binary "$1" -- "$f" > /tmp/one.diff 2>/dev/null || continue
-            done
-            # 上面管道在 subshell，改 here 正式逐檔：
+            local f ok=1 n_apply=0 n_fail=0
             git apply --numstat "$1" | cut -f3 > /tmp/files.txt
             while IFS= read -r f; do
-              git diff --binary "$(git merge-base HEAD "${3:-HEAD}")" HEAD -- "$f" >/dev/null 2>&1 || true
-              if git apply --3way --include="$f" "$1" 2>/dev/null; then :; else
-                echo "單檔失敗：$f"; ok=0
-                printf '%s\n' "$f" >> "$RUNNER_TEMP/conflicts.txt"
+              if git apply --3way --include="$f" "$1" 2>/dev/null; then
+                n_apply=$((n_apply+1))
+              else
+                n_fail=$((n_fail+1)); ok=0
+                echo "$2 衝突檔：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
               fi
             done < /tmp/files.txt
-            git add -A; git commit -qm "$2（逐檔套用，失敗清單見 conflicts）" || true
+            echo "$2：套用 $n_apply 檔、衝突 $n_fail 檔"
+            git add -A; git commit -qm "$2（逐檔套用 $n_apply 檔）" || true
             if [ "$ok" = 0 ]; then
-              echo "::error::$2 有檔案級衝突（其餘已套用）"; exit 1
+              echo "::error::$2 有 $n_fail 個衝突檔（清單見 zen1th-conflicts 分支）"; exit 1
             fi
           }
           apply_diff /tmp/zen.diff "zen 優化"

@@ -57,7 +57,8 @@ prepare() {
   for o in CONFIG_BLK_DEV_NVME=y CONFIG_EXT4_FS=y CONFIG_VFAT_FS=y CONFIG_EXFAT_FS=y \
            CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
            CONFIG_X86_64_VERSION=3 CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
-           CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y; do
+           CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
+           "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
     grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
   done
 }
