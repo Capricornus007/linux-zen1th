@@ -1,0 +1,63 @@
+name: build（makepkg → release linux-zen1th）
+on:
+  repository_dispatch:
+    types: [integration-ready]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  pkg:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux/archlinux:latest
+    timeout-minutes: 300
+    steps:
+      - name: 系統準備
+        run: |
+          echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+          pacman -Syu --noconfirm --needed base-devel git bc flex bison openssl python perl rsync cpio zstd libtraceevent pahole
+          useradd -m builder
+      - name: 取整合分支
+        run: |
+          git clone -q --branch zen1th "https://github.com/${GITHUB_REPOSITORY}.git" /home/builder/src
+          chown -R builder:builder /home/builder/src
+      - name: makepkg
+        run: |
+          su builder -c 'cd /home/builder/src && JOBS=$(nproc) makepkg -fs --noconfirm'
+      - name: 產物自檢（收口：壞包就紅，不發假包）
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pkgs=(/home/builder/src/linux-zen1th-*.pkg.tar.zst)
+          [ ${#pkgs[@]} -ge 2 ] || { echo "缺 package 產物"; exit 1; }
+          pkg=( $(ls /home/builder/src/linux-zen1th-[0-9]*.pkg.tar.zst) )
+          tar -tf "${pkg[0]}" | grep -q 'boot/vmlinuz-' || { echo "包內無 vmlinuz"; exit 1; }
+          tar -tf "${pkg[0]}" | grep -q 'lib/modules/.*kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko' || { echo "amdgpu 模組缺失"; exit 1; }
+          tar -tf "${pkg[0]}" | grep -q 'lib/modules/.*/kernel/drivers/net/wireless/realtek/rtw89/rtw89_8852ae.ko' || { echo "RTL8852AE 模組缺失"; exit 1; }
+          tar -xOf "${pkg[0]}" ./boot/config-* 2>/dev/null | grep -qx 'CONFIG_BLK_DEV_NVME=y' || { echo "包內 config NVME 非 y"; exit 1; }
+          ls -l /home/builder/src/*.pkg.tar.zst
+          du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
+      - name: 發佈到 current-kernel release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: current-kernel
+          name: linux-zen1th current（UTC+8 自動重建）
+          body: merge-bot 整合完成自動構建。SHA256 見附檔。
+          files: |
+            /home/builder/src/linux-zen1th-*.pkg.tar.zst
+            /home/builder/src/linux-zen1th-*.pkg.tar.zst.sig
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: SHA256SUMS
+        run: |
+          cd /home/builder/src
+          sha256sum linux-zen1th-*.pkg.tar.zst > SHA256SUMS-kernel
+      - name: 上傳 SHA256
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: current-kernel
+          files: /home/builder/src/SHA256SUMS-kernel
+          append_body: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
