@@ -62,6 +62,13 @@ prepare() {
   # -march=znver3 只影響調度與整數指令，不會讓內核用到向量暫存器。
   scripts/config -d MZEN4 -d X86_NATIVE_CPU
   sed -i 's/-march=x86-64 -mtune=generic/-march=znver3 -mtune=znver3/; s/-Ctarget-cpu=x86-64 /-Ctarget-cpu=znver3 /; s/-Ztune-cpu=generic/-Ztune-cpu=znver3/' arch/x86/Makefile
+  # v2.25：套件線開 -O3，內核同步。官方 linux-next init/Kconfig 只有
+  # CC_OPTIMIZE_FOR_PERFORMANCE(-O2) 與 CC_OPTIMIZE_FOR_SIZE(-Os)，
+  # 沒有 CC_OPTIMIZE_FOR_PERFORMANCE_O3（那是 CachyOS/zen 補丁），
+  # 所以用官方支援的 KCFLAGS（top Makefile:1224 `KBUILD_CFLAGS += $(KCFLAGS)`
+  # 排在 CONFIG 的 -O2 之後，會蓋過去），見 build()。
+  # LTO 不開：arch/Kconfig 只有 LTO_CLANG_*，GCC 工具鏈沒有 LTO_GCC。
+  scripts/config -e CC_OPTIMIZE_FOR_PERFORMANCE -d CC_OPTIMIZE_FOR_SIZE
   scripts/config -e SCHED_BORE -e CACHY -e IKCONFIG -e IKCONFIG_PROC -e DEBUG_INFO_BTF
   make olddefconfig
 
@@ -69,7 +76,8 @@ prepare() {
   local o
   for o in CONFIG_BLK_DEV_NVME=y CONFIG_EXT4_FS=y CONFIG_VFAT_FS=y CONFIG_EXFAT_FS=y \
            CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
-           "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
+           "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y \
+           CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
            CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
            CONFIG_USB_NET_DRIVERS=m CONFIG_USB_USBNET=m CONFIG_USB_NET_CDCETHER=m \
            CONFIG_USB_NET_CDC_NCM=m CONFIG_USB_NET_CDC_MBIM=m CONFIG_USB_NET_RNDIS_HOST=m \
@@ -82,7 +90,8 @@ prepare() {
 
 build() {
   cd "$_srcname"
-  make -j"${JOBS:-4}"
+  # KCFLAGS 由 top Makefile 加在 KBUILD_CFLAGS 尾端，蓋掉 CONFIG 的 -O2。
+  make -j"${JOBS:-4}" KCFLAGS=-O3
 }
 
 package_linux-zen1th() {
