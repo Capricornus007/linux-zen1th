@@ -49,8 +49,12 @@ prepare() {
       '# CONFIG_'*' is not set') opt=${line#'# CONFIG_'}; opt=${opt%% is not set}; scripts/config -d "$opt";;
     esac
   done < config/keep.fragment
-  # x86-64-v3（用戶裁定；禁 MZEN4/NATIVE 避免指令集超出本機）
-  scripts/config -d MZEN4 -d X86_NATIVE_CPU -e GENERIC_CPU --set-val X86_64_VERSION 3
+  # x86-64-v3（用戶裁定；禁 MZEN4/NATIVE 避免指令集超出本機）。
+  # 注意：mainline Kconfig 沒有 X86_64_VERSION 這種選項（run 42441427280 自檢實錘，
+  # scripts/config 對不存在的選項靜默丟行）。v3 的唯一真路＝改 arch/x86/Makefile 的
+  # 通用分支：-march=x86-64 → -march=x86-64-v3（rustflags 同步）。
+  scripts/config -d MZEN4 -d X86_NATIVE_CPU
+  sed -i 's/-march=x86-64 -mtune=generic/-march=x86-64-v3 -mtune=generic/; s/-Ctarget-cpu=x86-64 /-Ctarget-cpu=x86-64-v3 /' arch/x86/Makefile
   scripts/config -e SCHED_BORE -e CACHY -e IKCONFIG -e IKCONFIG_PROC -e DEBUG_INFO_BTF
   make olddefconfig
 
@@ -58,11 +62,13 @@ prepare() {
   local o
   for o in CONFIG_BLK_DEV_NVME=y CONFIG_EXT4_FS=y CONFIG_VFAT_FS=y CONFIG_EXFAT_FS=y \
            CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
-           CONFIG_X86_64_VERSION=3 CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
+           "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
            CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
            "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
     grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
   done
+  # v3 落地自檢（選項不存在於 Kconfig，只能查 Makefile 本身）
+  grep -q '\-march=x86-64-v3 -mtune=generic' arch/x86/Makefile || { echo "自檢失敗：arch/x86/Makefile 無 v3 march"; exit 1; }
 }
 
 build() {
