@@ -26,6 +26,13 @@ jobs:
           git clone -q --branch zen1th "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /home/builder/src
           git -C /home/builder/src remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           chown -R builder:builder /home/builder/src
+      - name: git 憑證改寫（private 倉）
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          # PKGBUILD 的 source= 是 git+https://github.com/…，倉 private 時 makepkg
+          # 自己 clone 會匿名要憑證（run 42433722041 實測 exit 1）。給 builder 全局
+          # insteadOf 注入 job token——runner 用完即棄、token 隨 job 過期，安全。
+          su builder -c "git config --global url.\"https://x-access-token:${GITHUB_TOKEN}@github.com/\".insteadOf \"https://github.com/\""
       - name: makepkg
         run: |
           su builder -c 'cd /home/builder/src && JOBS=$(nproc) makepkg -fs --noconfirm'
