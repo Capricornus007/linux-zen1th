@@ -72,7 +72,7 @@ jobs:
           [ ${#hpkg[@]} -eq 1 ] || { echo "缺 headers 產物"; exit 1; }
           hlisting=$(tar -tf "${hpkg[0]}")
           grep -q '^usr/src/linux-headers-' <<<"$hlisting" || { echo "headers 缺 /usr/src 編譯樹"; exit 1; }
-          grep -q '^lib/modules/.*/build$' <<<"$hlisting" || { echo "headers 缺 lib/modules/.../build"; exit 1; }
+          grep -qE '^(usr/lib|lib)/modules/.*/build$' <<<"$hlisting" || { echo "headers 缺 lib/modules/.../build"; exit 1; }
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
       - name: 發佈到 current-kernel release
