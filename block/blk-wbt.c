@@ -798,7 +798,12 @@ void wbt_init_enable_default(struct gendisk *disk)
 
 static u64 wbt_default_latency_nsec(struct request_queue *q)
 {
-	/* XanMod defaults to 2msec for any type of storage */
+	/*
+	 * We default to 2msec for non-rotational storage, and 75msec
+	 * for rotational storage.
+	 */
+	if (blk_queue_rot(q))
+		return 75000000ULL;
 	return 2000000ULL;
 }
 

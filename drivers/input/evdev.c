@@ -47,7 +47,6 @@ struct evdev_client {
 	struct fasync_struct *fasync;
 	struct evdev *evdev;
 	struct list_head node;
-	struct rcu_head rcu;
 	enum input_clock_type clk_type;
 	bool revoked;
 	unsigned long *evmasks[EV_CNT];
@@ -374,22 +373,13 @@ static void evdev_attach_client(struct evdev *evdev,
 	spin_unlock(&evdev->client_lock);
 }
 
-static void evdev_reclaim_client(struct rcu_head *rp)
-{
-	struct evdev_client *client = container_of(rp, struct evdev_client, rcu);
-	unsigned int i;
-	for (i = 0; i < EV_CNT; ++i)
-		bitmap_free(client->evmasks[i]);
-	kvfree(client);
-}
-
 static void evdev_detach_client(struct evdev *evdev,
 				struct evdev_client *client)
 {
 	spin_lock(&evdev->client_lock);
 	list_del_rcu(&client->node);
 	spin_unlock(&evdev->client_lock);
-	call_rcu(&client->rcu, evdev_reclaim_client);
+	synchronize_rcu();
 }
 
 static int evdev_open_device(struct evdev *evdev)
@@ -442,6 +432,7 @@ static int evdev_release(struct inode *inode, struct file *file)
 {
 	struct evdev_client *client = file->private_data;
 	struct evdev *evdev = client->evdev;
+	unsigned int i;
 
 	mutex_lock(&evdev->mutex);
 
@@ -452,6 +443,11 @@ static int evdev_release(struct inode *inode, struct file *file)
 	mutex_unlock(&evdev->mutex);
 
 	evdev_detach_client(evdev, client);
+
+	for (i = 0; i < EV_CNT; ++i)
+		bitmap_free(client->evmasks[i]);
+
+	kvfree(client);
 
 	evdev_close_device(evdev);
 
@@ -495,6 +491,7 @@ static int evdev_open(struct inode *inode, struct file *file)
 
  err_free_client:
 	evdev_detach_client(evdev, client);
+	kvfree(client);
 	return error;
 }
 

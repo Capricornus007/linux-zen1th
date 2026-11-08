@@ -2344,7 +2344,6 @@ void zap_vma_range(struct vm_area_struct *vma, unsigned long address,
 	zap_vma_range_batched(&tlb, vma, address, size, NULL);
 	tlb_finish_mmu(&tlb);
 }
-EXPORT_SYMBOL(zap_vma_range);
 
 /**
  * zap_special_vma_range - zap all page table entries in a VMA which is not
