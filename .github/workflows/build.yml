@@ -46,10 +46,20 @@ jobs:
           pkgs=(/home/builder/src/linux-zen1th-*.pkg.tar.zst)
           [ ${#pkgs[@]} -ge 2 ] || { echo "缺 package 產物"; exit 1; }
           pkg=( $(ls /home/builder/src/linux-zen1th-[0-9]*.pkg.tar.zst) )
-          tar -tf "${pkg[0]}" | grep -q 'boot/vmlinuz-' || { echo "包內無 vmlinuz"; exit 1; }
-          tar -tf "${pkg[0]}" | grep -q 'lib/modules/.*kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko' || { echo "amdgpu 模組缺失"; exit 1; }
-          tar -tf "${pkg[0]}" | grep -q 'lib/modules/.*/kernel/drivers/net/wireless/realtek/rtw89/rtw89_8852ae.ko' || { echo "RTL8852AE 模組缺失"; exit 1; }
-          tar -xOf "${pkg[0]}" ./boot/config-* 2>/dev/null | grep -qx 'CONFIG_BLK_DEV_NVME=y' || { echo "包內 config NVME 非 y"; exit 1; }
+          # ⚠️ 一律「整包清單/內容先讀進變數，再 grep 變數」，禁 `tar -tf | grep -q` 直管：
+          # run #10（42448783154）實測——包裡明明有 boot/vmlinuz-7.4.0rc1.…，
+          # 但 grep -q 命中即關管道，tar 吃 SIGPIPE 回 141，pipefail 讓整條管線 rc=141，
+          # || 分支誤報「包內無 vmlinuz」收口紅。本地 61MB 合成 tar 重現同型（外層 rc=141）。
+          # 另原 `tar -xOf pkg ./boot/config-*` 在 nullglob 下萬用字元對「解壓後的檔名」
+          # 展開＝空展開成零參數＝整個 tar 倒 stdout，同樣只能先取成員名再解。
+          listing=$(tar -tf "${pkg[0]}")
+          grep -q 'boot/vmlinuz-' <<<"$listing" || { echo "包內無 vmlinuz"; exit 1; }
+          grep -q 'lib/modules/.*kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko' <<<"$listing" || { echo "amdgpu 模組缺失"; exit 1; }
+          grep -q 'lib/modules/.*/kernel/drivers/net/wireless/realtek/rtw89/rtw89_8852ae.ko' <<<"$listing" || { echo "RTL8852AE 模組缺失"; exit 1; }
+          cfg=$(grep '^.*boot/config-' <<<"$listing" | head -1)
+          [ -n "$cfg" ] || { echo "包內無 boot/config-*"; exit 1; }
+          cfgtext=$(tar -xOf "${pkg[0]}" "$cfg")
+          grep -qx 'CONFIG_BLK_DEV_NVME=y' <<<"$cfgtext" || { echo "包內 config NVME 非 y"; exit 1; }
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
       - name: 發佈到 current-kernel release
