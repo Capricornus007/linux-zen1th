@@ -2,7 +2,8 @@
 # linux-zen1th —— 一切去尖端：
 #   基座 = linux-next（torvalds next 尖端，merge-bot 每日合入；補丁全部已合入整合分支）
 #   ⊕ BORE（CachyOS sched 補丁）⊕ zen-kernel ⊕ xanmod ⊕ cjktty
-#   編譯目標 x86-64-v3（用戶 CPU：AVX2、無 AVX-512，2026-11-07 裁定）
+#   編譯目標 znver3（用戶 CPU：Ryzen 5 5600U / Zen 3，2026-11-09 定案；
+#                     lfs-pacman 的 91 包 64/32 位也是同一個目標）
 #   模組精簡 = localmodconfig（ci/lsmod.list）＋ config/keep.fragment 硬需求補回
 # 來源 = 本倉 zen1th 整合分支（merge-bot.yml 維護，衝突即紅、絕不假裝成功）
 _pkgbase=linux-zen1th
@@ -12,7 +13,7 @@ _RepoOwner=Capricornus007
 _integration_branch=zen1th
 pkgver=0.r0.g0000000
 pkgrel=1
-pkgdesc="The Linux -next kernel with BORE, Zen, XanMod and cjktty optimizations; x86-64-v3, hw-trimmed"
+pkgdesc="The Linux -next kernel with BORE, Zen, XanMod and cjktty optimizations; znver3, hw-trimmed"
 arch=(x86_64)
 url="https://github.com/$_RepoOwner/linux-zen1th"
 license=(GPL2)
@@ -38,7 +39,7 @@ prepare() {
   echo "=== zen1th prepare @ $(git rev-parse --short HEAD) ==="
   echo "-zen1th" > localversion.20-pkgname
 
-  echo "--- config：用戶機底 + localmodconfig 精簡 + KEEP 補回 + v3 ---"
+  echo "--- config：用戶機底 + localmodconfig 精簡 + KEEP 補回 + znver3 ---"
   cp config/zen1th-x86_64.baseconfig .config
   make LSMOD=ci/lsmod.list localmodconfig
   local opt line
@@ -49,12 +50,18 @@ prepare() {
       '# CONFIG_'*' is not set') opt=${line#'# CONFIG_'}; opt=${opt%% is not set}; scripts/config -d "$opt";;
     esac
   done < config/keep.fragment
-  # x86-64-v3（用戶裁定；禁 MZEN4/NATIVE 避免指令集超出本機）。
-  # 注意：mainline Kconfig 沒有 X86_64_VERSION 這種選項（run 42441427280 自檢實錘，
-  # scripts/config 對不存在的選項靜默丟行）。v3 的唯一真路＝改 arch/x86/Makefile 的
-  # 通用分支：-march=x86-64 → -march=x86-64-v3（rustflags 同步）。
+  # znver3（2026-11-09 用戶定案：內核與 lfs-pacman 的 91 包一起對準本機 Zen 3）。
+  # 官方 linux-next arch/x86/Kconfig.cpu 實查：CPU 選項只有 X86_NATIVE_CPU，
+  # 沒有 MZEN3，也沒有 X86_64_VERSION（後者是 CachyOS 補丁；scripts/config 對
+  # 不存在的選項靜默丟行，run 42441427280 已實錘）。唯一真路＝改
+  # arch/x86/Makefile 的 else（非 native）分支，把 generic 的 march/tune 與
+  # rust target-cpu/tune-cpu 換成 znver3。
+  # X86_NATIVE_CPU 必關：CI runner 不是本機，開 native 會編出 runner 專用指令集
+  # （可能是 AVX-512），裝到 Zen 3 上直接非法指令、開不了機。
+  # kernel 自帶 -mno-sse/-mno-mmx/-mno-sse2/-mno-avx/-mno-sse4a，
+  # -march=znver3 只影響調度與整數指令，不會讓內核用到向量暫存器。
   scripts/config -d MZEN4 -d X86_NATIVE_CPU
-  sed -i 's/-march=x86-64 -mtune=generic/-march=x86-64-v3 -mtune=generic/; s/-Ctarget-cpu=x86-64 /-Ctarget-cpu=x86-64-v3 /' arch/x86/Makefile
+  sed -i 's/-march=x86-64 -mtune=generic/-march=znver3 -mtune=znver3/; s/-Ctarget-cpu=x86-64 /-Ctarget-cpu=znver3 /; s/-Ztune-cpu=generic/-Ztune-cpu=znver3/' arch/x86/Makefile
   scripts/config -e SCHED_BORE -e CACHY -e IKCONFIG -e IKCONFIG_PROC -e DEBUG_INFO_BTF
   make olddefconfig
 
@@ -69,8 +76,8 @@ prepare() {
            "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
     grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
   done
-  # v3 落地自檢（選項不存在於 Kconfig，只能查 Makefile 本身）
-  grep -q '\-march=x86-64-v3 -mtune=generic' arch/x86/Makefile || { echo "自檢失敗：arch/x86/Makefile 無 v3 march"; exit 1; }
+  # znver3 落地自檢（Kconfig 無對應選項，只能查 Makefile 本身）
+  grep -q '\-march=znver3 -mtune=znver3' arch/x86/Makefile || { echo "自檢失敗：arch/x86/Makefile 無 znver3 march"; exit 1; }
 }
 
 build() {
