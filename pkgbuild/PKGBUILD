@@ -84,7 +84,11 @@ package_linux-zen1th() {
   cd "$_srcname"
   local release; release=$(make -s kernelrelease)
   make INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_STRIP=1 modules_install
-  make INSTALL_PATH="$pkgdir/boot" install
+  # 不用 make install：7.4 的 scripts/install.sh 走 arch/x86/boot/install.sh，
+  # 產出「無版本後綴」的 boot/vmlinuz 且結尾試圖跑 LILO（run 42443660615 實測，
+  # 自检找 vmlinuz-* 找不到直接紅）。bzImage 直接擺放、帶版本名，GRUB 路徑固定。
+  install -D -m644 arch/x86/boot/bzImage "$pkgdir/boot/vmlinuz-$release"
+  install -D -m644 System.map "$pkgdir/boot/System.map-$release"
   install -D -m600 .config "$pkgdir/boot/config-$release"
 }
 
