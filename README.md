@@ -2,7 +2,8 @@
 
 自用的最尖端內核：**linux-next 尖端 ⊕ BORE(CachyOS) ⊕ zen-kernel ⊕ xanmod ⊕ lily(archlinuxcn) ⊕ cjktty**，
 （lily＝archlinuxcn linux-lily：無源碼補丁，config 層修改——BBR 默認＋CJK 字體，已併入 keep.fragment 並進 PKGBUILD 自檢）
-編譯目標 **x86-64-v3**，模組按本機硬件精簡（localmodconfig + keep.fragment）。
+編譯目標 **znver3**（本機 Ryzen 5 5600U／Zen 3；`lfs-pacman` 的 91 包 64／32 位同值），模組按本機硬件精簡（localmodconfig + keep.fragment）。
+CI 上**不開** `CONFIG_X86_NATIVE_CPU`：那會對準 GitHub runner 的 CPU，編出來的內核在本機可能直接非法指令。
 
 與 `Capricornus007/linux-cachyos-cjktty`（7.x stable、CachyOS 腳本式補丁）**互不相干、各自存在**：
 那位是 cachyos+cjktty，這裡是 next 全疊加棧。

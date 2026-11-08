@@ -60,6 +60,9 @@ jobs:
           [ -n "$cfg" ] || { echo "包內無 boot/config-*"; exit 1; }
           cfgtext=$(tar -xOf "${pkg[0]}" "$cfg")
           grep -qx 'CONFIG_BLK_DEV_NVME=y' <<<"$cfgtext" || { echo "包內 config NVME 非 y"; exit 1; }
+          # 關掉 X86_NATIVE_CPU 是硬閘：CI runner 不是目標機，誤開會編出 runner
+          # 專用指令集的內核，裝到 Zen 3 上開不了機。
+          grep -qx '# CONFIG_X86_NATIVE_CPU is not set' <<<"$cfgtext" || { echo "包內 config 誤開 X86_NATIVE_CPU"; exit 1; }
           # 手機 USB 網絡共享（realme 實測 cdc_ncm/cdc_ether）：父項與子項都要在，
           # 只有子項時 localmodconfig 會讓整組 USB net 消失（2026-11-08 實錘）。
           for opt in CONFIG_USB_NET_DRIVERS=m CONFIG_USB_USBNET=m \
