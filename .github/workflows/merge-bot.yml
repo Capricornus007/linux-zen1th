@@ -172,7 +172,10 @@ jobs:
           # 寫 ../meta 會解析成 meta/meta——run #17 就是在這 cp 失敗。
           cp ../config/* config/; cp ../ci/* ci/
           cp ../pkgbuild/PKGBUILD PKGBUILD
-          git add -A; git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
+          # next 樹的 .gitignore 自帶 `/PKGBUILD` 與 `.*` 規則，`git add -A` 會靜默跳過
+          # PKGBUILD 與 .scm_version（run #21「nothing to commit」實錘）→ 必須 add -f。
+          git add -A; git add -f PKGBUILD
+          git commit -qm "zen1th meta: PKGBUILD/config/keep/lsmod"
           # ===== zen1th 推「無上游歷史的單提交快照」=====
           # run #16–#19 四連紅實證：把 270 萬 commit 的 next 史＋整棵樹一次送進
           # GitHub HTTP 後端必 500（unpack 階段的後端限制，postBuffer/HTTP1.1/
@@ -183,7 +186,11 @@ jobs:
           NEXTSHA=$(git rev-parse next/master)
           git rm -q --cached .scm_version 2>/dev/null || true
           echo "$NEXTSHA" > .scm_version
-          git add -A; git commit -qm "zen1th snapshot $(date -u +%F) next=${NEXTSHA:0:12}" || true
+          git add -A; git add -f .scm_version
+          git commit -qm "zen1th snapshot $(date -u +%F) next=${NEXTSHA:0:12}" || true
+          # 推送前硬校驗：build.yml 靠根目錄 PKGBUILD 活命，缺了必須在源頭紅（#21 教訓）。
+          git ls-tree HEAD --name-only | grep -qx PKGBUILD || { echo "::error::快照樹缺 PKGBUILD"; exit 1; }
+          git ls-tree HEAD --name-only | grep -qx .scm_version || { echo "::error::快照樹缺 .scm_version"; exit 1; }
           TREE=$(git rev-parse 'zen1th^{tree}')
           PARENT=$(git ls-remote "$GITURL" refs/heads/zen1th | awk '{print $1}')
           if [ -n "$PARENT" ] && ! git cat-file -e "$PARENT" 2>/dev/null; then
