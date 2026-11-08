@@ -12,7 +12,7 @@
 | 分支/檔案 | 用途 |
 |---|---|
 | `master` | 中樞：PKGBUILD、config、keep.fragment、lsmod.list、workflows |
-| `zen1th` | **整合分支**（merge-bot 自動維護）：next ⊕ zen ⊕ xanmod ⊕ BORE ⊕ cjktty 的實際源码 |
+| `zen1th` | **整合快照分支**（merge-bot 每日全量重組）：next ⊕ zen ⊕ xanmod ⊕ BORE ⊕ cjktty 的實際源码＋根目錄 PKGBUILD/config/ci。**無上游歷史**（單提交鏈、≤30 代）——270 萬 commit 的 next 史整包推 GitHub 必 500（run #16–#19 實證），真實 next commit 記在 `.scm_version` |
 | `pkgbuild/PKGBUILD` | 直接 `makepkg` 整合分支即可出包（Arch 包或手動 install 均可） |
 | `config/zen1th-x86_64.baseconfig` | 底 config（＝現機 7.3.1-cachyos-cjktty 實測可用版） |
 | `config/keep.fragment` | localmodconfig 裁剪後強制補回的硬需求（NVME=y/EXT4=y/vfat/BTF/dae 16 項/RTL8852AE…） |
@@ -20,9 +20,11 @@
 
 ## 流程（全自動）
 
-1. `merge-bot.yml` 每日 09:00（UTC+8）：整合分支 fetch linux-next 尖端做 `git merge`；
-   首次/重建時依序合 zen-kernel master、xanmod 7.3 分支、CachyOS BORE 補丁、cjktty 補丁。
-   **任何衝突 = workflow 紅 + 衝突檔案清單留檔**，絕不假裝成功。
+1. `merge-bot.yml` 每日 09:00（UTC+8）全量重組：取 next 尖端，依 merge-base 算
+   zen/xanmod **淨差量**逐檔 3way 套用（xanmod 漂移屬常態：衝突檔回退保留基座版＋
+   清單推 `zen1th-conflicts` 分支＋::warning::；zen 差量衝突則必紅），
+   再打 BORE（required）與 cjktty（required，衝突必紅）；快照樹硬校驗
+   PKGBUILD/.scm_version 在位後推單提交快照。
 2. 合併成功 → repository_dispatch 觸發 `build.yml`：archlinux 容器 `makepkg`，
    產物自檢（vmlinuz/amdgpu.ko/rtw89_8852ae.ko/config NVME=y 全在包內，缺一即紅），
    發佈到 `current-kernel` release + SHA256SUMS。
@@ -30,8 +32,9 @@
 
 ## 版本
 
-`pkgver()` 用 `git describe`（如 `7.4.rc1.g<sha>`），本地手動構建即可复現。
-本地構建：`git clone -b zen1th … && makepkg -fs`。
+`pkgver()`＝`核心版本.r<UTC日期>.g<快照sha>`（快照分支無 tag/無歷史，describe 不可用），
+例如 `7.4.0rc1.r20261108.g83f0895`。每日自然遞增、pacman 升級排序安全。
+本地構建：`git clone -b zen1th … && makepkg -fs`（倉是 private，帶 token）。
 
 ## 已知代價（誠實記錄）
 
