@@ -29,12 +29,13 @@ jobs:
       - name: git 憑證改寫（private 倉）
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
-          # PKGBUILD 的 source= 是 git+https://github.com/…，倉 private 時 makepkg
-          # 二次 clone 匿名必敗（#13）；使用者層 global config 連寫兩次都沒被套用
-          # （#14/#15，容器 HOME 攪局，不再與它搏鬥）——改寫 /etc/gitconfig 系統層，
-          # root 與 builder、任何 HOME 都必讀，無從繞過。job token 隨 job 過期。
-          git config --system url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --system --get-regexp insteadOf
+          # pacman 7.1 的 makepkg 對 git 來源下載封死一般 config 層
+          # （/usr/share/makepkg/source/git.sh:31-32）：
+          #   GIT_CONFIG_GLOBAL=/dev/null、GIT_CONFIG_SYSTEM=${MAKEPKG_GIT_CONFIG:-/etc/makepkg.d/gitconfig}
+          # ——#13–#16 四連紅都在錯誤的層寫憑證。唯一正解：寫 /etc/makepkg.d/gitconfig。
+          install -d /etc/makepkg.d
+          git config -f /etc/makepkg.d/gitconfig url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config -f /etc/makepkg.d/gitconfig --get-regexp insteadOf
       - name: makepkg
         run: |
           su builder -c 'cd /home/builder/src && HOME=/home/builder JOBS=$(nproc) makepkg -fs --noconfirm'
