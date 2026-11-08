@@ -73,6 +73,7 @@ jobs:
             fi
             echo "$2：整檔 3way 不行，逐檔套用…"
             local f ok=1 n_apply=0 n_fail=0
+            : > /tmp/conf_include.txt
             git apply --numstat "$1" | cut -f3 > /tmp/files.txt
             while IFS= read -r f; do
               if git apply --3way --include="$f" "$1" 2>/dev/null; then
@@ -89,11 +90,25 @@ jobs:
                   git rm -q -f --cached -- "$f" 2>/dev/null || true
                   rm -f "$f"
                 fi
+                case "$f" in include/*) echo "$f" >> /tmp/conf_include.txt ;; esac
                 echo "$2 衝突檔（已回退保留基座版）：$f" | tee -a "$RUNNER_TEMP/conflicts.txt"
               fi
             done < /tmp/files.txt
             echo "$2：套用 $n_apply 檔、衝突 $n_fail 檔"
-            git add -A; git commit -qm "$2（逐檔套用 $n_apply 檔）" || true
+            # 頭文件是契約：衝突集裡只要有 include/**，半套的 .h×.c 配對必然不一致
+            # （run 42435337972：xanmod tcp_ecn.h 套上、其依賴的 include/net/tcp.h 被
+            # 回退 → implicit declaration of tcp_set_ecn_low_from_dst，全速編到 74% 才炸）。
+            # 這種情況整層回退，寧可全丟這層 sauce 也不留半套。
+            if [ "$ok" = 0 ] && [ "$3" = no ] && [ -s /tmp/conf_include.txt ]; then
+              echo "::warning::$2 衝突含 include/ 標頭（$(wc -l < /tmp/conf_include.txt) 個）→ 整層回退（半套標頭編譯必炸）"
+              git reset --hard -q HEAD
+              # 只清 HEAD 裡沒有的新增檔；HEAD 既有檔 reset 後就是基座版，絕不能 rm。
+              while IFS= read -r f; do
+                git cat-file -e "HEAD:$f" 2>/dev/null || rm -f "$f"
+              done < /tmp/files.txt
+            else
+              git add -A; git commit -qm "$2（逐檔套用 $n_apply 檔）" || true
+            fi
             if [ "$ok" = 0 ]; then
               if [ "$3" = yes ]; then
                 echo "::error::$2 有 $n_fail 個衝突檔（清單見 zen1th-conflicts 分支）"; exit 1
