@@ -60,6 +60,19 @@ jobs:
           [ -n "$cfg" ] || { echo "包內無 boot/config-*"; exit 1; }
           cfgtext=$(tar -xOf "${pkg[0]}" "$cfg")
           grep -qx 'CONFIG_BLK_DEV_NVME=y' <<<"$cfgtext" || { echo "包內 config NVME 非 y"; exit 1; }
+          # 手機 USB 網絡共享（realme 實測 cdc_ncm/cdc_ether）：父項與子項都要在，
+          # 只有子項時 localmodconfig 會讓整組 USB net 消失（2026-11-08 實錘）。
+          for opt in CONFIG_USB_NET_DRIVERS=m CONFIG_USB_USBNET=m \
+                     CONFIG_USB_NET_CDCETHER=m CONFIG_USB_NET_CDC_NCM=m \
+                     CONFIG_USB_NET_CDC_MBIM=m CONFIG_USB_NET_RNDIS_HOST=m; do
+            grep -qx "$opt" <<<"$cfgtext" || { echo "包內 config 缺 $opt"; exit 1; }
+          done
+          # headers 包必須含完整 DKMS 編譯樹，不能只有 usr/include。
+          hpkg=( $(ls /home/builder/src/linux-zen1th-headers-[0-9]*.pkg.tar.zst) )
+          [ ${#hpkg[@]} -eq 1 ] || { echo "缺 headers 產物"; exit 1; }
+          hlisting=$(tar -tf "${hpkg[0]}")
+          grep -q '^usr/src/linux-headers-' <<<"$hlisting" || { echo "headers 缺 /usr/src 編譯樹"; exit 1; }
+          grep -q '^lib/modules/.*/build$' <<<"$hlisting" || { echo "headers 缺 lib/modules/.../build"; exit 1; }
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
       - name: 發佈到 current-kernel release

@@ -64,6 +64,8 @@ prepare() {
            CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
            "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
            CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
+           CONFIG_USB_NET_DRIVERS=m CONFIG_USB_USBNET=m CONFIG_USB_NET_CDCETHER=m \
+           CONFIG_USB_NET_CDC_NCM=m CONFIG_USB_NET_CDC_MBIM=m CONFIG_USB_NET_RNDIS_HOST=m \
            "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
     grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
   done
@@ -97,6 +99,25 @@ package_linux-zen1th-headers() {
   depends=(elfutils)
   provides=("linux-headers")
   cd "$_srcname"
+  local release; release=$(make -s kernelrelease)
   make headers_install INSTALL_HDR_PATH="$pkgdir/usr"
+  # DKMS／外部模組需要的是「已 configure 的內核編譯樹」，不是只有 UAPI headers。
+  # 之前只裝 usr/include，NVIDIA DKMS 找不到 include/generated、Module.symvers、
+  # scripts 與 arch/x86，必然編不過。這裡照 Arch linux-headers 的佈局安裝：
+  #   /usr/src/linux-headers-<release>/
+  #   /usr/lib/modules/<release>/build -> 上述目錄
+  install -d "$pkgdir/usr/src/linux-headers-$release"
+  tar -cf - \
+    --exclude='.git' --exclude='*.o' --exclude='*.ko' --exclude='*.ko.*' \
+    --exclude='*.cmd' --exclude='*.a' --exclude='*.mod' --exclude='*.mod.c' \
+    --exclude='modules.order' --exclude='.tmp_*' \
+    --exclude='vmlinux' --exclude='vmlinux.o' --exclude='System.map' \
+    --exclude='arch/x86/boot/bzImage' \
+    Makefile Kconfig .config Module.symvers arch block certs crypto drivers fs \
+    init io_uring kernel lib mm net rust samples scripts security sound tools usr virt \
+    | tar -xf - -C "$pkgdir/usr/src/linux-headers-$release"
+  install -d "$pkgdir/usr/lib/modules/$release"
+  ln -sfn "/usr/src/linux-headers-$release" "$pkgdir/usr/lib/modules/$release/build"
+  ln -sfn "/usr/src/linux-headers-$release" "$pkgdir/usr/lib/modules/$release/source"
 }
 # vim:set ts=2 sw=2 et:
