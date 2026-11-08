@@ -32,10 +32,13 @@ jobs:
           # PKGBUILD 的 source= 是 git+https://github.com/…，倉 private 時 makepkg
           # 自己 clone 會匿名要憑證（run 42433722041 實測 exit 1）。給 builder 全局
           # insteadOf 注入 job token——runner 用完即棄、token 隨 job 過期，安全。
-          su builder -c "git config --global url.\"https://x-access-token:${GITHUB_TOKEN}@github.com/\".insteadOf \"https://github.com/\""
+          # 注意 #2：容器 HOME=/github/root 域（run #14：step 綠了但 makepkg 讀不到）——
+          # 兩個 step 都顯式釘 HOME=/home/builder，寫入與讀取同檔才有效。
+          su builder -c "HOME=/home/builder git config --global url.\"https://x-access-token:${GITHUB_TOKEN}@github.com/\".insteadOf \"https://github.com/\""
+          su builder -c 'HOME=/home/builder git config --global --get-regexp insteadOf | wc -l'
       - name: makepkg
         run: |
-          su builder -c 'cd /home/builder/src && JOBS=$(nproc) makepkg -fs --noconfirm'
+          su builder -c 'cd /home/builder/src && HOME=/home/builder JOBS=$(nproc) makepkg -fs --noconfirm'
       - name: 產物自檢（收口：壞包就紅，不發假包）
         run: |
           set -euo pipefail
