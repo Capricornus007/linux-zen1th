@@ -1,0 +1,92 @@
+# Maintainer: Capricornus007 <sihaogang at gmail dot com>
+# linux-zen1th —— 一切去尖端：
+#   基座 = linux-next（torvalds next 尖端，merge-bot 每日合入；補丁全部已合入整合分支）
+#   ⊕ BORE（CachyOS sched 補丁）⊕ zen-kernel ⊕ xanmod ⊕ cjktty
+#   編譯目標 x86-64-v3（用戶 CPU：AVX2、無 AVX-512，2026-11-07 裁定）
+#   模組精簡 = localmodconfig（ci/lsmod.list）＋ config/keep.fragment 硬需求補回
+# 來源 = 本倉 zen1th 整合分支（merge-bot.yml 維護，衝突即紅、絕不假裝成功）
+_pkgbase=linux-zen1th
+pkgbase=$_pkgbase
+pkgname=("$_pkgbase" "$_pkgbase-headers")
+_RepoOwner=Capricornus007
+_integration_branch=zen1th
+pkgver=0.r0.g0000000
+pkgrel=1
+pkgdesc="The Linux -next kernel with BORE, Zen, XanMod and cjktty optimizations; x86-64-v3, hw-trimmed"
+arch=(x86_64)
+url="https://github.com/$_RepoOwner/linux-zen1th"
+license=(GPL2)
+makedepends=(git bc flex bison openssl python perl rsync cpio kmod zstd)
+options=(!debug)
+source=("git+https://github.com/$_RepoOwner/linux-zen1th.git#branch=$_integration_branch")
+sha256sums=(SKIP)
+_srcname=linux-zen1th
+
+pkgver() {
+  cd "$srcdir/$_srcname"
+  # zen1th 是無上游歷史的快照分支（見 merge-bot.yml：整包推 next 史會 500），
+  # describe/rev-list --count 都失去意義。版本用「核心版本.r<UTC日期>.g<快照sha>」：
+  # 每日構建自然遞增、跨快照鏈重開也單調，pacman 升級排序安全。
+  # .scm_version 存整合時的真實 next commit（追溯用，不進版本號）。
+  local kv
+  kv=$(make -s kernelversion | tr -d '-')
+  printf '%s.r%s.g%s' "$kv" "$(date -u +%Y%m%d)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$_srcname"
+  echo "=== zen1th prepare @ $(git rev-parse --short HEAD) ==="
+  echo "-zen1th" > localversion.20-pkgname
+
+  echo "--- config：用戶機底 + localmodconfig 精簡 + KEEP 補回 + v3 ---"
+  cp config/zen1th-x86_64.baseconfig .config
+  make LSMOD=ci/lsmod.list localmodconfig
+  local opt line
+  while IFS= read -r line; do
+    case "$line" in
+      CONFIG_*=y)  opt=${line#CONFIG_}; opt=${opt%%=y}; scripts/config -e "$opt";;
+      CONFIG_*=m)  opt=${line#CONFIG_}; opt=${opt%%=m}; scripts/config -m "$opt";;
+      '# CONFIG_'*' is not set') opt=${line#'# CONFIG_'}; opt=${opt%% is not set}; scripts/config -d "$opt";;
+    esac
+  done < config/keep.fragment
+  # x86-64-v3（用戶裁定；禁 MZEN4/NATIVE 避免指令集超出本機）
+  scripts/config -d MZEN4 -d X86_NATIVE_CPU -e GENERIC_CPU --set-val X86_64_VERSION 3
+  scripts/config -e SCHED_BORE -e CACHY -e IKCONFIG -e IKCONFIG_PROC -e DEBUG_INFO_BTF
+  make olddefconfig
+
+  echo "--- 開機硬項自檢（任一不符即停，絕不產出開不了機的包）---"
+  local o
+  for o in CONFIG_BLK_DEV_NVME=y CONFIG_EXT4_FS=y CONFIG_VFAT_FS=y CONFIG_EXFAT_FS=y \
+           CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
+           CONFIG_X86_64_VERSION=3 CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
+           CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
+           "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
+    grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
+  done
+}
+
+build() {
+  cd "$_srcname"
+  make -j"${JOBS:-4}"
+}
+
+package_linux-zen1th() {
+  depends=(coreutils kmod)
+  optdepends=('linux-zen1th-headers: headers for external modules')
+  provides=("linux" "kernel")
+  conflicts=(linux)
+  cd "$_srcname"
+  local release; release=$(make -s kernelrelease)
+  make INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_STRIP=1 modules_install
+  make INSTALL_PATH="$pkgdir/boot" install
+  install -D -m600 .config "$pkgdir/boot/config-$release"
+}
+
+package_linux-zen1th-headers() {
+  pkgdesc="Headers and scripts for $pkgbase kernel"
+  depends=(elfutils)
+  provides=("linux-headers")
+  cd "$_srcname"
+  make headers_install INSTALL_HDR_PATH="$pkgdir/usr"
+}
+# vim:set ts=2 sw=2 et:
