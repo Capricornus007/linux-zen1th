@@ -34,9 +34,22 @@ jobs:
           git remote add xanmod https://gitlab.com/xanmod/linux.git
           git remote add lin    https://github.com/torvalds/linux.git
           git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-          git fetch --filter=blob:none -q next    master:refs/remotes/next/master
+          # kernel.org 的 git HTTP 後端間歇 502（11/11 的 merge-bot 就死在 fetch next）——
+          # 對 kernel.org 的兩條 fetch 加 3 次重試；全失敗才紅，不再一次 502 就收工。
+          # sleep 只在 CI runner 裡跑，不阻塞本機。
+          fetch_retry() { # $@=git fetch 的參數
+            local t
+            for t in 1 2 3; do
+              if git fetch "$@"; then return 0; fi
+              echo "::warning::git fetch $* 第 $t 次失敗（kernel.org 常見 502），重試"
+              [ "$t" = 3 ] || sleep 20
+            done
+            echo "::error::git fetch $* 三次全失敗"
+            return 1
+          }
+          fetch_retry --filter=blob:none -q next   master:refs/remotes/next/master || exit 1
           git fetch --filter=blob:none -q lin     master:refs/remotes/lin/master
-          git fetch --filter=blob:none -q stable  linux-7.3.y:refs/remotes/stable/linux-7.3.y
+          fetch_retry --filter=blob:none -q stable linux-7.3.y:refs/remotes/stable/linux-7.3.y || exit 1
           git fetch -q zen    master:refs/remotes/zen/master
           git fetch -q xanmod 7.3:refs/remotes/xanmod/7.3
           git checkout -q -b zen1th next/master
@@ -121,19 +134,37 @@ jobs:
             echo "SCHED_BORE 已在疊加棧內（lqx/zen 自帶），跳過 CachyOS BORE 補丁"
             grep -qr 'config SCHED_BORE' kernel/sched/ && git log -1 --format='bore-source: %s' 
           else
-            # 優先用 BORE 官方（firelzrd/bore-scheduler）對「本基座 kernelversion」發布的
-            # 正式檔；CachyOS 目錄版滯後半個週期,對 next 基座會 fair.c 衝突
-            # （run 42398532726：官方對 7.4-rc1 的 7.0.1 已合入 next 基座上下文）。
+            # 優先用 BORE 官方（firelzrd/bore-scheduler）的補丁。CachyOS 目錄版只當
+            # 「官方完全沒有這條版本線」時的最後手段：CachyOS 7.4 的 fair.c hunk#3 帶
+            # 9 行 CONFIG_CACHY 專屬預像（vanilla/next 根本沒有那段）→ 結構性衝突必紅
+            # （run 43178088574：1 out of 23 hunks FAILED，11/10 起連紅）。
             # kernelversion 對 rc 會多出 .0（7.4.0-rc1）；BORE 官方檔名用 7.4-rc1——去 .0
             KVER=$(make -s kernelversion | sed -E 's/^([0-9]+\.[0-9]+)\.0(-|$)/\1\2/')
+            # next 進 7.4-rc2 時官方 patches/testing 只發布到同線的 rc1（無 rc2）。
+            # 舊 grep 拿整個 $KVER 當錨，7.4-rc2 對不上 rc1 → 白白退回 CachyOS 撞牆。
+            # 改成「同 major.minor 官方最新補丁」：KBASE 去掉 -rcN、grep 吃 rc 後綴。
+            # 實測 0001-linux7.4-rc1-bore-7.0.1.patch 套 next 7.4-rc2：零 FAILED、offset≤76。
+            KBASE=${KVER%%-rc*}
             # 匿名 api.github.com 在 runner 上會 403 rate-limit（失敗曾被 || true 吞掉、
             # 誤報「官方尚無補丁」）——帶 GITHUB_TOKEN，且 API 失敗直接紅、不靜默退回。
             BLIST_JSON=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               "https://api.github.com/repos/firelzrd/bore-scheduler/contents/patches/testing") \
               || { echo "::error::bore-scheduler 檔列表 API 請求失敗"; exit 1; }
-            BLIST=$(printf '%s' "$BLIST_JSON" | jq -r '.[].name' | grep -E "^0001-linux${KVER}(-rc[0-9]+)?-bore-" | sort -V | tail -1 || true)
-            [ -n "$BLIST" ] || echo "::warning::BORE 官方確無 $KVER 補丁（列表已抓、無匹配檔）" 
+            BNAMES=$(printf '%s' "$BLIST_JSON" | jq -r '.[].name')
+            # ① 先找完全對版（如 7.4-rc2）；② 沒有才取同版本線最新。
+            # sort -V 陷阱：裸 7.4 會排在 7.4-rc1 之前，tail 反而挑到舊 rc。把 -rcN
+            # 換成 ~rcN（GNU filevercmp 的 ~ 排在所有字元之前）再排→正式版＞rc、
+            # rc 號大者勝、bore 版本新者勝，排完換回原檔名。
+            BLIST=$(printf '%s\n' "$BNAMES" | grep -E "^0001-linux${KVER}-bore-" | sort -V | tail -1 || true)
+            if [ -z "$BLIST" ]; then
+              BLIST=$(printf '%s\n' "$BNAMES" \
+                | grep -E "^0001-linux${KBASE}(-rc[0-9]+)?-bore-" \
+                | sed -E 's/-rc([0-9]+)-bore-/~rc\1-bore-/' | sort -V | tail -1 \
+                | sed -E 's/~rc([0-9]+)-bore-/-rc\1-bore-/' || true)
+            fi
+            [ -n "$BLIST" ] || echo "::warning::BORE 官方確無 $KBASE 版本線補丁（列表已抓、無匹配檔）"
             if [ -n "$BLIST" ]; then
+              echo "BORE 官方選中：$BLIST（next 基座 $KVER）"
               curl -fsSLO "https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches/testing/${BLIST}"
               if git apply --check --3way "$BLIST" 2>/dev/null; then
                 git apply --3way "$BLIST"
@@ -158,7 +189,7 @@ jobs:
               fi
               git add -A; git commit -qm "bore（BORE 官方 $BLIST）"
             else
-              echo "::warning::BORE 官方尚無 $KVER 的補丁,退回 CachyOS 目錄版"
+              echo "::warning::BORE 官方完全沒有 $KBASE 版本線的補丁,最後手段退回 CachyOS 目錄版"
               MAJ=$(awk '/^VERSION/{v=$3}/^PATCHLEVEL/{p=$3}END{print v"."p}' Makefile)
               curl -fsSLO "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${MAJ}/sched/0001-bore-cachy.patch"
               patch -Np1 < "0001-bore-cachy.patch" || { echo "::error::CachyOS BORE 補丁衝突"; exit 1; }
