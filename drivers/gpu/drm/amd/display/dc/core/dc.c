@@ -2551,6 +2551,8 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 		 * update pending complete before optimizing bandwidth.
 		 */
 		hwss_wait_for_odm_update_pending_complete(dc, context);
+		/* No DET may stay allocated to a HUBP without a plane (e.g. left over from VBIOS) */
+		hwss_reset_unused_det(dc, context);
 		/* pplib is notified if disp_num changed */
 		dc->hwss.optimize_bandwidth(dc, context);
 		/* Need to do otg sync again as otg could be out of sync due to otg
@@ -4981,8 +4983,10 @@ static void commit_planes_for_stream(struct dc *dc,
 	dc_exit_ips_for_hw_access(dc);
 
 	dc_z10_restore(dc);
-	if (update_type == UPDATE_TYPE_FULL && dc->optimized_required)
+	if (update_type == UPDATE_TYPE_FULL && dc->optimized_required) {
+		hwss_reset_unused_det(dc, dc->current_state);
 		hwss_process_outstanding_hw_updates(dc, dc->current_state);
+	}
 
 	if (update_type != UPDATE_TYPE_FAST && dc->res_pool->funcs->prepare_mcache_programming)
 		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
@@ -6626,6 +6630,27 @@ void dc_lock_memory_clock_frequency(struct dc *dc)
 
 	if (dc->clk_mgr->funcs->set_hard_max_memclk)
 		dc->clk_mgr->funcs->set_hard_max_memclk(dc->clk_mgr);
+}
+
+/*
+ * Re-read the memclk DPM levels from PMFW (e.g. after an overdrive change),
+ * refresh the bounding box and WM ranges, and re-apply the UCLK hard min/max
+ * for the current mode. Returns the new max memclk in MHz, 0 if unsupported.
+ */
+unsigned int dc_refresh_memclk_states(struct dc *dc)
+{
+	if (!dc->clk_mgr || !dc->clk_mgr->bw_params ||
+	    !dc->clk_mgr->funcs->get_memclk_states_from_smu)
+		return 0;
+
+	dc_exit_ips_for_hw_access(dc);
+
+	dc_lock_memory_clock_frequency(dc);
+
+	if (dc->clk_mgr->funcs->notify_wm_ranges)
+		dc->clk_mgr->funcs->notify_wm_ranges(dc->clk_mgr);
+
+	return dc->clk_mgr->bw_params->max_memclk_mhz;
 }
 
 static void blank_and_force_memclk(struct dc *dc, bool apply, unsigned int memclk_mhz)

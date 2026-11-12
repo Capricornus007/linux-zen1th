@@ -1386,7 +1386,7 @@ static const struct of_device_id omap_gpio_match[] = {
 		.compatible = "ti,omap2-gpio",
 		.data = &omap2_pdata,
 	},
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, omap_gpio_match);
 
@@ -1404,7 +1404,7 @@ static int omap_gpio_probe(struct platform_device *pdev)
 	if (!pdata)
 		return -EINVAL;
 
-	bank = devm_kzalloc(dev, sizeof(*bank), GFP_KERNEL);
+	bank = devm_kzalloc_obj(dev, *bank);
 	if (!bank)
 		return -ENOMEM;
 

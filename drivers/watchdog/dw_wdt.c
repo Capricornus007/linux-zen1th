@@ -536,7 +536,7 @@ static void dw_wdt_dbgfs_init(struct dw_wdt *dw_wdt)
 	struct device *dev = dw_wdt->wdd.parent;
 	struct debugfs_regset32 *regset;
 
-	regset = devm_kzalloc(dev, sizeof(*regset), GFP_KERNEL);
+	regset = devm_kzalloc_obj(dev, *regset);
 	if (!regset)
 		return;
 
@@ -568,7 +568,7 @@ static int dw_wdt_drv_probe(struct platform_device *pdev)
 	struct dw_wdt *dw_wdt;
 	int ret;
 
-	dw_wdt = devm_kzalloc(dev, sizeof(*dw_wdt), GFP_KERNEL);
+	dw_wdt = devm_kzalloc_obj(dev, *dw_wdt);
 	if (!dw_wdt)
 		return -ENOMEM;
 
@@ -666,6 +666,7 @@ static int dw_wdt_drv_probe(struct platform_device *pdev)
 
 	watchdog_set_restart_priority(wdd, 128);
 	watchdog_stop_on_reboot(wdd);
+	watchdog_stop_ping_on_suspend(wdd);
 
 	ret = watchdog_register_device(wdd);
 	if (ret)

@@ -534,7 +534,7 @@ static void dm_test_destroy_hpd_rx_wq(void *data)
 }
 
 static const struct drm_connector_funcs dm_test_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 	.fill_modes = drm_helper_probe_single_connector_modes,
@@ -2328,7 +2328,7 @@ dm_test_setup_hpd_rx_offload_work(struct kunit *test,
 	link->connector_signal = SIGNAL_TYPE_DISPLAY_PORT;
 	aconn->dc_link = link;
 
-	offload_work = kzalloc_obj(*offload_work, GFP_KERNEL);
+	offload_work = kzalloc_obj(*offload_work);
 	KUNIT_ASSERT_NOT_NULL(test, offload_work);
 	offload_work->offload_wq = offload_wq;
 	offload_work->adev = adev;
@@ -2398,6 +2398,7 @@ static void dm_test_hpd_rx_offload_work_in_reset(struct kunit *test)
  */
 static void dm_test_hpd_rx_offload_work_msg_rdy(struct kunit *test)
 {
+	struct hpd_rx_irq_offload_work_queue *offload_wq;
 	struct hpd_rx_irq_offload_work *offload_work;
 	struct amdgpu_dm_connector *aconn;
 	struct link_service *link_srv;
@@ -2419,9 +2420,15 @@ static void dm_test_hpd_rx_offload_work_msg_rdy(struct kunit *test)
 	offload_work->offload_wq->is_handling_mst_msg_rdy_event = true;
 	offload_work->data.bytes.device_service_irq.bits.UP_REQ_MSG_RDY = 1;
 
+	/* NB: offload_work is freed by dm_handle_hpd_rx_offload_work so need to
+	 * save a pointer to the wq to do the final KUNIT_EXPECT. This is safe
+	 * because the wq is actually a kunit_alloc and is not freed along with
+	 * the offload_work object.
+	 */
+	offload_wq = offload_work->offload_wq;
 	dm_handle_hpd_rx_offload_work(&offload_work->work);
 
-	KUNIT_EXPECT_FALSE(test, offload_work->offload_wq->is_handling_mst_msg_rdy_event);
+	KUNIT_EXPECT_FALSE(test, offload_wq->is_handling_mst_msg_rdy_event);
 }
 
 /**
@@ -3801,7 +3808,7 @@ static void dm_test_pflip_high_irq_completes_flip(struct kunit *test)
 	acrtc->pflip_status = AMDGPU_FLIP_SUBMITTED;
 
 	/* drm_crtc_send_vblank_event() consumes (kfree()s) the event. */
-	event = kzalloc_obj(*event, GFP_KERNEL);
+	event = kzalloc_obj(*event);
 	KUNIT_ASSERT_NOT_NULL(test, event);
 	acrtc->event = event;
 
@@ -3877,7 +3884,7 @@ static void dm_test_pflip_high_irq_vrr_no_scanoutpos(struct kunit *test)
 	adev = drm_to_adev(acrtc->base.dev);
 
 	/* drm_crtc_send_vblank_event() consumes (kfree()s) the event. */
-	event = kzalloc_obj(*event, GFP_KERNEL);
+	event = kzalloc_obj(*event);
 	KUNIT_ASSERT_NOT_NULL(test, event);
 	acrtc->event = event;
 
@@ -3917,7 +3924,7 @@ static void dm_test_pflip_high_irq_vrr_front_porch(struct kunit *test)
 	acrtc = dm_test_setup_vrr_pflip_crtc(test, tg);
 	adev = drm_to_adev(acrtc->base.dev);
 
-	event = kzalloc_obj(*event, GFP_KERNEL);
+	event = kzalloc_obj(*event);
 	KUNIT_ASSERT_NOT_NULL(test, event);
 	acrtc->event = event;
 
@@ -3978,7 +3985,7 @@ static void dm_test_vupdate_high_irq_dcn_completes_flip(struct kunit *test)
 	acrtc = dm_test_add_crtc(test, adev);
 	acrtc->pflip_status = AMDGPU_FLIP_SUBMITTED;
 
-	event = kzalloc_obj(*event, GFP_KERNEL);
+	event = kzalloc_obj(*event);
 	KUNIT_ASSERT_NOT_NULL(test, event);
 	acrtc->event = event;
 
@@ -4252,7 +4259,7 @@ static void dm_test_crtc_high_irq_writeback_completes(struct kunit *test)
 	 * The job carries no framebuffer or fence, so the deferred DRM cleanup
 	 * work only kfree()s it; it needs nothing from this test.
 	 */
-	job = kzalloc_obj(*job, GFP_KERNEL);
+	job = kzalloc_obj(*job);
 	KUNIT_ASSERT_NOT_NULL(test, job);
 	list_add_tail(&job->list_entry, &wb_conn->job_queue);
 
@@ -4344,7 +4351,7 @@ static void dm_test_handle_hpd_work_null_notify(struct kunit *test)
 	struct amdgpu_device *adev;
 
 	adev = dm_kunit_alloc_adev(test);
-	hpd_work = kzalloc_obj(*hpd_work, GFP_KERNEL);
+	hpd_work = kzalloc_obj(*hpd_work);
 	KUNIT_ASSERT_NOT_NULL(test, hpd_work);
 	hpd_work->adev = adev;
 	INIT_WORK(&hpd_work->handle_hpd_work, dm_handle_hpd_work);

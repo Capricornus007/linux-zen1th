@@ -2539,8 +2539,7 @@ static int ath10k_sdio_probe(struct sdio_func *func,
 	ar_sdio = ath10k_sdio_priv(ar);
 
 	ar_sdio->irq_data.irq_proc_reg =
-		devm_kzalloc(ar->dev, sizeof(struct ath10k_sdio_irq_proc_regs),
-			     GFP_KERNEL);
+		devm_kzalloc_obj(ar->dev, struct ath10k_sdio_irq_proc_regs);
 	if (!ar_sdio->irq_data.irq_proc_reg) {
 		ret = -ENOMEM;
 		goto err_core_destroy;
@@ -2553,8 +2552,7 @@ static int ath10k_sdio_probe(struct sdio_func *func,
 	}
 
 	ar_sdio->irq_data.irq_en_reg =
-		devm_kzalloc(ar->dev, sizeof(struct ath10k_sdio_irq_enable_regs),
-			     GFP_KERNEL);
+		devm_kzalloc_obj(ar->dev, struct ath10k_sdio_irq_enable_regs);
 	if (!ar_sdio->irq_data.irq_en_reg) {
 		ret = -ENOMEM;
 		goto err_core_destroy;

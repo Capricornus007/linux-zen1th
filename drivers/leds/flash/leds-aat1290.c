@@ -228,6 +228,11 @@ static int aat1290_led_flash_timeout_set(struct led_classdev_flash *fled_cdev,
 	return 0;
 }
 
+static void aat1290_of_node_put(void *data)
+{
+	of_node_put(data);
+}
+
 static int aat1290_led_parse_dt(struct aat1290_led *led,
 			struct aat1290_led_config_data *cfg,
 			struct device_node **sub_node)
@@ -296,9 +301,9 @@ static int aat1290_led_parse_dt(struct aat1290_led *led,
 		return ret;
 	}
 
-	*sub_node = child_node;
+	*sub_node = no_free_ptr(child_node);
 
-	return 0;
+	return devm_add_action_or_reset(dev, aat1290_of_node_put, *sub_node);
 }
 
 static void aat1290_led_validate_mm_current(struct aat1290_led *led,
@@ -330,10 +335,9 @@ static int init_mm_current_scale(struct aat1290_led *led,
 	max_mm_current = mult_frac(cfg->max_flash_current, 1000,
 				   led->info->mm_to_fl_ratio);
 
-	led->mm_current_scale = devm_kcalloc(&led->pdev->dev,
-					ARRAY_SIZE(max_mm_current_percent),
-					sizeof(*led->mm_current_scale),
-					GFP_KERNEL);
+	led->mm_current_scale = devm_kzalloc_objs(&led->pdev->dev,
+						  *led->mm_current_scale,
+						  ARRAY_SIZE(max_mm_current_percent));
 	if (!led->mm_current_scale)
 		return -ENOMEM;
 
@@ -412,6 +416,9 @@ static s32 aat1290_brightness_to_intensity(struct v4l2_flash *v4l2_flash,
 	struct led_classdev_flash *fled_cdev = v4l2_flash->fled_cdev;
 	struct aat1290_led *led = fled_cdev_to_led(fled_cdev);
 
+	if (brightness == LED_OFF)
+		return 0;
+
 	return led->mm_current_scale[brightness - 1];
 }
 
@@ -429,12 +436,14 @@ static int aat1290_led_external_strobe_set(struct v4l2_flash *v4l2_flash,
 	led->movie_mode = false;
 	led_cdev->brightness = 0;
 
-	pinctrl = devm_pinctrl_get_select(&led->pdev->dev,
-						enable ? "isp" : "host");
+	pinctrl = pinctrl_get_select(&led->pdev->dev,
+				     enable ? "isp" : "host");
 	if (IS_ERR(pinctrl)) {
 		dev_warn(&led->pdev->dev, "Unable to switch strobe source.\n");
 		return PTR_ERR(pinctrl);
 	}
+
+	pinctrl_put(pinctrl);
 
 	return 0;
 }
@@ -489,7 +498,7 @@ static int aat1290_led_probe(struct platform_device *pdev)
 	struct v4l2_flash_config v4l2_sd_cfg = {};
 	int ret;
 
-	led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+	led = devm_kzalloc_obj(dev, *led);
 	if (!led)
 		return -ENOMEM;
 

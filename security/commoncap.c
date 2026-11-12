@@ -1166,13 +1166,8 @@ int cap_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
 		break;
 
 	case LSM_SETID_FS:
-		/* Juggle the capabilities to follow FSUID changes, unless
-		 * otherwise suppressed.
-		 *
-		 * CAP_FS_SET is exactly the set of capabilities that an
-		 * fsuid of 0 historically granted (see CAP_FS_MASK in
-		 * <linux/capability.h>), so we drop that set when fsuid
-		 * leaves 0.
+		/* juggle the capabilities to follow FSUID changes, unless
+		 * otherwise suppressed
 		 */
 		if (!issecure(SECURE_NO_SETUID_FIXUP)) {
 			kuid_t root_uid = make_kuid(old->user_ns, 0);

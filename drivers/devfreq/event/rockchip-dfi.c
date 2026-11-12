@@ -831,7 +831,7 @@ static int rockchip_dfi_probe(struct platform_device *pdev)
 	if (!soc_init)
 		return -EINVAL;
 
-	dfi = devm_kzalloc(dev, sizeof(*dfi), GFP_KERNEL);
+	dfi = devm_kzalloc_obj(dev, *dfi);
 	if (!dfi)
 		return -ENOMEM;
 

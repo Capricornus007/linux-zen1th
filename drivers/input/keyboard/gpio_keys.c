@@ -412,8 +412,6 @@ static irqreturn_t gpio_keys_gpio_isr(int irq, void *dev_id)
 {
 	struct gpio_button_data *bdata = dev_id;
 
-	BUG_ON(irq != bdata->irq);
-
 	if (bdata->button->wakeup) {
 		const struct gpio_keys_button *button = bdata->button;
 
@@ -464,8 +462,6 @@ static irqreturn_t gpio_keys_irq_isr(int irq, void *dev_id)
 {
 	struct gpio_button_data *bdata = dev_id;
 	struct input_dev *input = bdata->input;
-
-	BUG_ON(irq != bdata->irq);
 
 	guard(spinlock_irqsave)(&bdata->lock);
 
@@ -862,16 +858,14 @@ static int gpio_keys_probe(struct platform_device *pdev)
 			return PTR_ERR(pdata);
 	}
 
-	ddata = devm_kzalloc(dev, struct_size(ddata, data, pdata->nbuttons),
-			     GFP_KERNEL);
+	ddata = devm_kzalloc_flex(dev, *ddata, data, pdata->nbuttons);
 	if (!ddata) {
 		dev_err(dev, "failed to allocate state\n");
 		return -ENOMEM;
 	}
 
-	ddata->keymap = devm_kcalloc(dev,
-				     pdata->nbuttons, sizeof(ddata->keymap[0]),
-				     GFP_KERNEL);
+	ddata->keymap = devm_kzalloc_objs(dev, ddata->keymap[0],
+					  pdata->nbuttons);
 	if (!ddata->keymap)
 		return -ENOMEM;
 

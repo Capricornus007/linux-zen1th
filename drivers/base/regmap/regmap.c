@@ -1215,7 +1215,7 @@ static void regmap_field_init(struct regmap_field *rm_field,
 	rm_field->regmap = regmap;
 	rm_field->reg = reg_field.reg;
 	rm_field->shift = reg_field.lsb;
-	rm_field->mask = GENMASK(reg_field.msb, reg_field.lsb);
+	rm_field->mask = REG_FIELD_GENMASK(reg_field);
 
 	WARN_ONCE(rm_field->mask == 0, "invalid empty mask defined\n");
 
@@ -1237,8 +1237,7 @@ static void regmap_field_init(struct regmap_field *rm_field,
 struct regmap_field *devm_regmap_field_alloc(struct device *dev,
 		struct regmap *regmap, struct reg_field reg_field)
 {
-	struct regmap_field *rm_field = devm_kzalloc(dev,
-					sizeof(*rm_field), GFP_KERNEL);
+	struct regmap_field *rm_field = devm_kzalloc_obj(dev, *rm_field);
 	if (!rm_field)
 		return ERR_PTR(-ENOMEM);
 
@@ -1306,7 +1305,7 @@ int devm_regmap_field_bulk_alloc(struct device *dev,
 	struct regmap_field *rf;
 	int i;
 
-	rf = devm_kcalloc(dev, num_fields, sizeof(*rf), GFP_KERNEL);
+	rf = devm_kzalloc_objs(dev, *rf, num_fields);
 	if (!rf)
 		return -ENOMEM;
 

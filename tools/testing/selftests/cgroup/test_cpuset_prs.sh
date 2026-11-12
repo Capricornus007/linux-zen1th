@@ -434,6 +434,12 @@ TEST_MATRIX=(
 	# cpuset.cpus is allowed, but those extra CPUs are ignored.
 	"  C2-3:P1   C3:P1  .      .      .     C2-4    .      .     0 A1:|A2:2-3 A1:P1|A2:P1"
 
+	# Clearing cpuset.cpus.exclusive of an invalid partition releases its
+	# exclusive CPUs, including those of its descendants, so a sibling
+	# can claim them.
+	" CX2-3:P1    .     .     C3  T:O2=0:O3=0:X  .     .      X3   0 XA1:|XB1:3 A1:P-1"
+	" CX2-3:P1   X3     .     C3  T:O2=0:O3=0:X  .     .      X3   0 XA1:|XA2:|XB1:3 A1:P-1"
+
 	# A child cannot recover until its exclusive CPUs are available again.
 	" CX1-4:P1 CX3-4:P1 .     .     X1-2     .      .      .     0 A1:1-2|A2:1-2|XA2: A1:P1|A2:P-1"
 	" CX1-4:P1 CX3-4:P1 .     .  X1-2:X1-4   .      .      .     0 A1:1-2|A2:3-4|XA2:3-4 A1:P1|A2:P1"
@@ -534,18 +540,28 @@ TEST_MATRIX=(
 
 	# The extra CPUs gained by a child partition when its parent expands the
 	# exclusive CPUs have to be taken away from the parent.
-	" C2-6:X2-5:P1 CX3-6:P1 \
-	                    .      .    X2-6     .      .      .     0 A1:2|A2:3-6|XA2:3-6 A1:P1|A2:P1 ."
-	" C2-6:X2-5:P1 CX3-6:P2 \
-	                    .      .    X2-6     .      .      .     0 A1:2|A2:3-6|XA2:3-6 A1:P1|A2:P2 3-6"
+	" C2-6:X2-5:P1 CX4-6:P1 \
+	                    .      .    X2-6     .      .      .     0 A1:2-3|A2:4-6|XA2:4-6 \
+								       A1:P1|A2:P1 ."
+	" C2-6:X2-5:P1 CX4-6:P2 \
+	                    .      .    X2-6     .      .      .     0 A1:2-3|A2:4-6|XA2:4-6 \
+								       A1:P1|A2:P2 4-6"
 
 	# Both expansion and contraction of parent's effective_xcpus will be
 	# correctly handled in child partition and the child can be invalidated
 	# if a populated parent could lose all its effective_cpus.
 	" C2-6:X2-5:P1 CX3,5-6:P2 \
-	                    .      .    X4-6     .      .      .     0 A1:4|A2:5-6|XA2:5-6 A1:P1|A2:P2 5-6"
+	                    .      .    X4-6     .      .      .     0 A1:4|A2:5-6|XA2:5-6 \
+								       A1:P1|A2:P2 4-6|5-6"
 	" C2-6:X2-5:P1 CX3-6:P2 \
 	                    .      .   T:X4-6    .      .      .     0 A1:4-6|A2:4-6 A1:P1|A2:P-2 ."
+
+	# Switch PRS state (root <=> isolated) will properly update cpuset.cpus.isolated
+	# even if child partitions are present.
+	" C1-6:P1 C3-6:P1 C5-6:P2  .       .    P2      .      .     0 A1:1-2|A2:3-4|A3:5-6 \
+								       A1:P1|A2:P2|A3:P2 3-6"
+	" C1-6:P1 C3-6:P2 C5-6:P2  .       .    P1      .      .     0 A1:1-2|A2:3-4|A3:5-6 \
+								       A1:P1|A2:P1|A3:P2 5-6"
 
 	#
 	#  old-A1 old-A2 old-A3 old-B1 new-A1 new-A2 new-A3 new-B1 fail ECPUs Pstate ISOLCPUS

@@ -5056,6 +5056,7 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	struct btrfs_ioctl_subvol_wait args = { 0 };
 	signed long sched_ret;
 	int refs;
+	int ret;
 	u64 root_flags;
 	bool wait_for_deletion = false;
 	bool found = false;
@@ -5126,8 +5127,9 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	}
 
 	/* 32bit limitation: fs_roots_radix key is not wide enough. */
-	if (sizeof(unsigned long) != sizeof(u64) && args.subvolid > U32_MAX)
-		return -EOVERFLOW;
+	ret = btrfs_check_subvolid(fs_info, args.subvolid);
+	if (ret < 0)
+		return ret;
 
 	while (1) {
 		/* Wait for the specific one. */
@@ -5166,8 +5168,12 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 			return -ENOENT;
 
 		wait_for_deletion = true;
-		ASSERT(root_flags & BTRFS_ROOT_SUBVOL_DEAD, "root_flags=0x%llx",
-		       root_flags);
+		if (unlikely(!(root_flags & BTRFS_ROOT_SUBVOL_DEAD))) {
+			btrfs_err(fs_info,
+				  "subvol %llu has refs 0 without DEAD flag",
+				  args.subvolid);
+			return -EUCLEAN;
+		}
 		sched_ret = schedule_timeout_interruptible(HZ);
 		/* Early wake up or error. */
 		if (sched_ret != 0)

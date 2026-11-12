@@ -4864,16 +4864,9 @@ static void rt5677_init_gpio(struct i2c_client *i2c)
 	rt5677->gpio_chip.parent = &i2c->dev;
 	rt5677->gpio_chip.base = -1;
 
-	ret = gpiochip_add_data(&rt5677->gpio_chip, rt5677);
+	ret = devm_gpiochip_add_data(&i2c->dev, &rt5677->gpio_chip, rt5677);
 	if (ret != 0)
 		dev_err(&i2c->dev, "Failed to add GPIOs: %d\n", ret);
-}
-
-static void rt5677_free_gpio(struct i2c_client *i2c)
-{
-	struct rt5677_priv *rt5677 = i2c_get_clientdata(i2c);
-
-	gpiochip_remove(&rt5677->gpio_chip);
 }
 #else
 static void rt5677_gpio_config(struct rt5677_priv *rt5677, unsigned offset,
@@ -4882,10 +4875,6 @@ static void rt5677_gpio_config(struct rt5677_priv *rt5677, unsigned offset,
 }
 
 static void rt5677_init_gpio(struct i2c_client *i2c)
-{
-}
-
-static void rt5677_free_gpio(struct i2c_client *i2c)
 {
 }
 #endif
@@ -5596,8 +5585,7 @@ static int rt5677_i2c_probe(struct i2c_client *i2c)
 	int ret;
 	unsigned int val;
 
-	rt5677 = devm_kzalloc(&i2c->dev, sizeof(struct rt5677_priv),
-				GFP_KERNEL);
+	rt5677 = devm_kzalloc_obj(&i2c->dev, struct rt5677_priv);
 	if (rt5677 == NULL)
 		return -ENOMEM;
 
@@ -5730,11 +5718,6 @@ static int rt5677_i2c_probe(struct i2c_client *i2c)
 				      rt5677_dai, ARRAY_SIZE(rt5677_dai));
 }
 
-static void rt5677_i2c_remove(struct i2c_client *i2c)
-{
-	rt5677_free_gpio(i2c);
-}
-
 static struct i2c_driver rt5677_i2c_driver = {
 	.driver = {
 		.name = RT5677_DRV_NAME,
@@ -5743,7 +5726,6 @@ static struct i2c_driver rt5677_i2c_driver = {
 	},
 	.id_table = rt5677_i2c_id,
 	.probe    = rt5677_i2c_probe,
-	.remove   = rt5677_i2c_remove,
 };
 module_i2c_driver(rt5677_i2c_driver);
 

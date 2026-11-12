@@ -3486,7 +3486,7 @@ sub process {
 		}
 
 # Check for added, moved or deleted files
-		if (!$reported_maintainer_file && !$in_commit_log &&
+		if (!$reported_maintainer_file && !$in_commit_log && !$in_header_lines &&
 		    ($line =~ /^(?:new|deleted) file mode\s*\d+\s*$/ ||
 		     $line =~ /^rename (?:from|to) [\w\/\.\-]+\s*$/ ||
 		     ($line =~ /\{\s*([\w\/\.\-]*)\s*\=\>\s*([\w\/\.\-]*)\s*\}/ &&
@@ -6056,6 +6056,9 @@ sub process {
 			$dstat =~ s/^\s*//s;
 			$dstat =~ s/\s*$//s;
 
+			# Make asm volatile uses seem like a generic function
+			$dstat =~ s/\b_*asm_*\s+_*volatile_*\b/asm_volatile/g;
+
 			# Flatten any parentheses and braces
 			while ($dstat =~ s/\([^\(\)]*\)/1u/ ||
 			       $dstat =~ s/\{[^\{\}]*\}/1u/ ||
@@ -6068,9 +6071,6 @@ sub process {
 			       $dstat =~ s/$Ident\s*($String)/$1/)
 			{
 			}
-
-			# Make asm volatile uses seem like a generic function
-			$dstat =~ s/\b_*asm_*\s+_*volatile_*\b/asm_volatile/g;
 
 			my $exceptions = qr{
 				$Declare|
@@ -6895,7 +6895,6 @@ sub process {
 				"noreturn"			=> "__noreturn",
 				"packed"			=> "__packed",
 				"pure"				=> "__pure",
-				"require_explicit_initialization" => "__require_explicit_initialization",
 				"section"			=> "__section",
 				"used"				=> "__used",
 				"weak"				=> "__weak"

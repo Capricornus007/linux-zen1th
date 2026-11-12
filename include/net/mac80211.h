@@ -1772,7 +1772,8 @@ enum mac80211_rx_encoding {
  * @zero_length_psdu_type: radiotap type of the 0-length PSDU
  * @link_id: id of the link used to receive the packet. Set and used by
  *	mac80211 internally, it uses @freq set by the driver to identify the
- *	correct link per vif.
+ *	correct link per vif. Set to %IEEE80211_LINK_UNSPECIFIED for non-MLD
+ *	or if link information is not applicable.
  */
 struct ieee80211_rx_status {
 	u64 mactime;
@@ -2619,6 +2620,9 @@ struct ieee80211_sta_aggregates {
  * or a MLD STA(multiple entries) are stored here.
  *
  * @sta: reference to owning STA
+ * @link_conf: The per-link BSS configuration for the link that the
+ *	station belongs to. During SMD Transition, this link might
+ *	not be in vif->links[].
  * @addr: MAC address of the Link STA. For non-MLO STA this is same as the addr
  *	in ieee80211_sta. For MLO Link STA this addr can be same or different
  *	from addr in ieee80211_sta (representing MLD STA addr)
@@ -2648,6 +2652,7 @@ struct ieee80211_sta_aggregates {
  */
 struct ieee80211_link_sta {
 	struct ieee80211_sta *sta;
+	struct ieee80211_bss_conf *link_conf;
 
 	u8 addr[ETH_ALEN];
 	u8 link_id;
@@ -2723,6 +2728,8 @@ struct ieee80211_link_sta {
  *	would be assigned to link[link_id] where link_id is the id assigned
  *	by the AP.
  * @valid_links: bitmap of valid links, or 0 for non-MLO
+ * @active_links: bitmap of active links, always a subset of @valid_links;
+ *	unused (0) for non-MLO
  * @spp_amsdu: indicates whether the STA uses SPP A-MSDU or not.
  * @epp_peer: indicates that the peer is an EPP peer.
  * @cip: indicates whether the STA uses control frame protection or not.
@@ -2758,6 +2765,7 @@ struct ieee80211_sta {
 	struct ieee80211_txq *txq[IEEE80211_NUM_TIDS + 1];
 
 	u16 valid_links;
+	u16 active_links;
 	u16 ext_mld_capa_ops;
 	bool epp_peer;
 	struct ieee80211_link_sta deflink;
@@ -2789,10 +2797,10 @@ static inline bool lockdep_sta_mutex_held(struct ieee80211_sta *pubsta)
 	rcu_dereference_check((sta)->link[link_id],		\
 			      lockdep_sta_mutex_held(sta))
 
-#define for_each_sta_active_link(vif, sta, link_sta, link_id)			\
+#define for_each_sta_active_link(sta, link_sta, link_id)			\
 	for (link_id = 0; link_id < ARRAY_SIZE((sta)->link); link_id++)		\
-		if ((!(vif)->active_links ||					\
-		     (vif)->active_links & BIT(link_id)) &&			\
+		if ((!(sta)->active_links ||					\
+		     (sta)->active_links & BIT(link_id)) &&			\
 		    ((link_sta) = link_sta_dereference_check(sta, link_id)))
 
 /**
@@ -4732,20 +4740,23 @@ struct ieee80211_prep_tx_info {
  *	resolve a path for hardware flow offloading
  * @can_activate_links: Checks if a specific active_links bitmap is
  *	supported by the driver.
- * @change_vif_links: Change the valid links on an interface, note that while
+ * @change_vif_links: Change the active links of an interface, note that while
  *	removing the old link information is still valid (link_conf pointer),
- *	but may immediately disappear after the function returns. The old or
- *	new links bitmaps may be 0 if going from/to a non-MLO situation.
+ *	but may immediately disappear after the function returns if the link(s)
+ *	is/are not just deactivated, but removed entirely. The old or new links
+ *	bitmaps may be 0 if going from/to a non-MLO situation.
  *	The @old array contains pointers to the old bss_conf structures
  *	that were already removed, in case they're needed.
  *	Note that removal of link should always succeed, so the return value
  *	will be ignored in a removal only case.
  *	This callback can sleep.
- * @change_sta_links: Change the valid links of a station, similar to
+ * @change_sta_links: Change the active links of a station, similar to
  *	@change_vif_links. This callback can sleep.
- *	Note that a sta can also be inserted or removed with valid links,
- *	i.e. passed to @sta_add/@sta_state with sta->valid_links not zero.
- *	In fact, cannot change from having valid_links and not having them.
+ *	Note that a sta can also be inserted or removed with active links,
+ *	i.e. passed to @sta_add/@sta_state with sta->valid_links not zero
+ *	(note vif->active_links needs to be considered with sta->valid_links).
+ *	It cannot, in fact, change between having valid_links and not having
+ *	any, since it either represents an MLD or not.
  * @set_hw_timestamp: Enable/disable HW timestamping of TM/FTM frames. This is
  *	not restored at HW reset by mac80211 so drivers need to take care of
  *	that.
@@ -5441,7 +5452,8 @@ void ieee80211_restart_hw(struct ieee80211_hw *hw);
  */
 void ieee80211_rx_list(struct ieee80211_hw *hw,
 		       struct ieee80211_link_sta *link_sta,
-		       struct sk_buff *skb, struct list_head *list);
+		       struct sk_buff *skb, struct list_head *list)
+	__must_hold_shared(RCU);
 
 /**
  * ieee80211_rx_napi - receive frame from NAPI context
@@ -6779,9 +6791,10 @@ struct ieee80211_sta *ieee80211_find_sta(struct ieee80211_vif *vif,
  *
  * DO NOT USE THIS FUNCTION with localaddr NULL if at all possible.
  */
-struct ieee80211_sta *ieee80211_find_sta_by_ifaddr(struct ieee80211_hw *hw,
-					       const u8 *addr,
-					       const u8 *localaddr);
+struct ieee80211_sta *
+ieee80211_find_sta_by_ifaddr(struct ieee80211_hw *hw, const u8 *addr,
+			     const u8 *localaddr)
+	__must_hold_shared(RCU);
 
 /**
  * ieee80211_find_sta_by_link_addrs - find STA by link addresses
@@ -6799,7 +6812,8 @@ struct ieee80211_sta *
 ieee80211_find_sta_by_link_addrs(struct ieee80211_hw *hw,
 				 const u8 *addr,
 				 const u8 *localaddr,
-				 unsigned int *link_id);
+				 unsigned int *link_id)
+	__must_hold_shared(RCU);
 
 /**
  * ieee80211_sta_block_awake - block station from waking up

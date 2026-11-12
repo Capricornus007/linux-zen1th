@@ -157,7 +157,7 @@ static int bin_slot_try_alloc(struct vc4_dev *vc4)
 {
 	int slot;
 
-	guard(spinlock_irqsave)(&vc4->job_lock);
+	guard(spinlock_irqsave)(&vc4->bin_alloc_lock);
 
 	slot = ffs(~vc4->bin_alloc_used);
 	if (slot != 0) {
@@ -403,7 +403,7 @@ static int vc4_v3d_bind(struct device *dev, struct device *master, void *data)
 	struct vc4_v3d *v3d = NULL;
 	int ret;
 
-	v3d = devm_kzalloc(&pdev->dev, sizeof(*v3d), GFP_KERNEL);
+	v3d = devm_kzalloc_obj(&pdev->dev, *v3d);
 	if (!v3d)
 		return -ENOMEM;
 

@@ -492,7 +492,7 @@ static const struct of_device_id gpio_rcar_of_table[] = {
 		.data = &gpio_rcar_info_gen1,
 	}, {
 		/* Terminator */
-	},
+	}
 };
 
 MODULE_DEVICE_TABLE(of, gpio_rcar_of_table);
@@ -548,7 +548,7 @@ static int gpio_rcar_probe(struct platform_device *pdev)
 	unsigned int npins;
 	int ret;
 
-	p = devm_kzalloc(dev, sizeof(*p), GFP_KERNEL);
+	p = devm_kzalloc_obj(dev, *p);
 	if (!p)
 		return -ENOMEM;
 

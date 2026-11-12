@@ -390,6 +390,17 @@ LIBBPF_API void bpf_program__set_ifindex(struct bpf_program *prog,
 LIBBPF_API const char *bpf_program__name(const struct bpf_program *prog);
 LIBBPF_API const char *bpf_program__section_name(const struct bpf_program *prog);
 LIBBPF_API bool bpf_program__autoload(const struct bpf_program *prog);
+
+/**
+ * @brief **bpf_program__set_autoload()** sets whether a BPF program is
+ * loaded automatically when its bpf_object is loaded.
+ *
+ * @param prog BPF program to update
+ * @param autoload true to load the program automatically, false to disable
+ * its loading
+ * @return 0 on success; -EINVAL if the object was already prepared or if the
+ * program is a subprogram
+ */
 LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog, bool autoload);
 LIBBPF_API bool bpf_program__autoattach(const struct bpf_program *prog);
 LIBBPF_API void bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
@@ -1530,6 +1541,7 @@ struct ring_buffer;
 struct ring;
 struct user_ring_buffer;
 
+/* Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps. */
 typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
 
 struct ring_buffer_opts {
@@ -1617,18 +1629,17 @@ LIBBPF_API int ring__map_fd(const struct ring *r);
  *
  * @param r A ringbuffer object.
  * @return The number of records consumed (or INT_MAX, whichever is less), or
- * a negative number if any of the callbacks return an error.
+ * a negative error code on failure.
  */
 LIBBPF_API int ring__consume(struct ring *r);
 
 /**
- * @brief **ring__consume_n()** consumes up to a requested amount of items from
- * a ringbuffer without event polling.
+ * @brief **ring__consume_n()** consumes up to a requested number of records
+ * from a ringbuffer without event polling.
  *
  * @param r A ringbuffer object.
- * @param n Maximum amount of items to consume.
- * @return The number of items consumed, or a negative number if any of the
- * callbacks return an error.
+ * @param n Maximum number of records to consume.
+ * @return The number of records consumed, or a negative error code on failure.
  */
 LIBBPF_API int ring__consume_n(struct ring *r, size_t n);
 
@@ -2177,7 +2188,8 @@ enum bpf_prog_load_strategy {
  *
  * @param prog BPF program to update
  * @param strategy new load strategy for the program
- * @return 0 on success; negative error code if the object was already prepared
+ * @return 0 on success; -EINVAL if the object was already prepared, if the
+ * strategy is not a valid one, or if the program is a subprogram
  */
 LIBBPF_API int bpf_program__set_load_strategy(struct bpf_program *prog,
 					      enum bpf_prog_load_strategy strategy);

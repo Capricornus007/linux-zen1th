@@ -91,11 +91,7 @@ static int cc_trng_pm_get(struct device *dev)
 
 static void cc_trng_pm_put_suspend(struct device *dev)
 {
-	int rc;
-
-	rc = pm_runtime_put_autosuspend(dev);
-	if (rc)
-		dev_err(dev, "pm_runtime_put_autosuspend returned %x\n", rc);
+	pm_runtime_put_autosuspend(dev);
 }
 
 static int cc_trng_pm_init(struct cctrng_drvdata *drvdata)
@@ -232,7 +228,7 @@ static int cctrng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 		cnt_w = CIRC_CNT(drvdata->circ.head,
 				 drvdata->circ.tail, CCTRNG_DATA_BUF_WORDS);
 		size = min((cnt_w<<2), left);
-		memcpy(data, &(buf[drvdata->circ.tail]), size);
+		memcpy(data + copied, &buf[drvdata->circ.tail], size);
 		copied += size;
 		circ_idx_inc(&drvdata->circ.tail, size);
 	}
@@ -461,7 +457,7 @@ static int cctrng_probe(struct platform_device *pdev)
 	BUILD_BUG_ON(CCTRNG_DATA_BUF_WORDS < 6);
 	BUILD_BUG_ON((CCTRNG_DATA_BUF_WORDS & (CCTRNG_DATA_BUF_WORDS-1)) != 0);
 
-	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 

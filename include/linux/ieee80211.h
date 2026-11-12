@@ -1193,7 +1193,7 @@ struct ieee80211_mgmt {
 				struct {
 					u8 dialog_token;
 					u8 type;
-					u8 count;
+					__le16 status_code;
 					u8 variable[];
 				} __packed uhr_link_reconf_resp;
 				struct {
@@ -1815,6 +1815,7 @@ enum ieee80211_eid_ext {
 	WLAN_EID_EXT_OPS = 46,
 	WLAN_EID_EXT_HE_BSS_LOAD = 47,
 	WLAN_EID_EXT_MAX_CHANNEL_SWITCH_TIME = 52,
+	WLAN_EID_EXT_OCI = 54,
 	WLAN_EID_EXT_MULTIPLE_BSSID_CONFIGURATION = 55,
 	WLAN_EID_EXT_NON_INHERITANCE = 56,
 	WLAN_EID_EXT_KNOWN_BSSID = 57,

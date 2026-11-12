@@ -25,7 +25,7 @@ Lists all worker pools indexed by their ID. For each pool:
 
   flags     pool flags in hex
   ref       number of pool_workqueue's associated with this pool
-  nice      nice value of the worker threads in the pool
+  nice      nice value of the worker threads in the pool, or "rt"
   idle      number of idle workers
   workers   number of all workers
   cpu       CPU the pool is associated with (per-cpu pool)
@@ -95,6 +95,24 @@ def wq_attrs(wq):
     except AttributeError:
         return wq.unbound_attrs
 
+def pool_nice(pool):
+    if HAS_PRIO:
+        prio = pool.attrs.prio.value_()
+        if prio == rt_prio:
+            return 'rt'
+        else:
+            return str(prio - 120) # PRIO_TO_NICE
+    else:
+        return str(pool.attrs.nice.value_())
+
+def pool_bh_type(pool):
+    if HAS_PRIO:
+        bh_hi = pool.attrs.prio.value_() == HIGHPRI_PRIO.value_()
+    else:
+        bh_hi = pool.attrs.nice.value_() == HIGHPRI_NICE_LEVEL.value_()
+
+    return 'bh-hi' if bh_hi else 'bh'
+
 def worker_current_start(worker):
     try:
         return worker.current_start.value_()
@@ -137,13 +155,20 @@ WQ_AFFN_SYSTEM          = prog['WQ_AFFN_SYSTEM']
 POOL_BH                 = prog['POOL_BH']
 POOL_BH_DRAINING        = prog['POOL_BH_DRAINING']
 POOL_DISASSOCIATED      = prog['POOL_DISASSOCIATED']
-HIGHPRI_NICE_LEVEL      = prog['HIGHPRI_NICE_LEVEL']
 WORKER_IDLE             = prog['WORKER_IDLE']
 
 WQ_NAME_LEN             = prog['WQ_NAME_LEN'].value_()
 cpumask_str_len         = len(cpumask_str(wq_unbound_cpumask))
 hz                      = get_hz()
 jiffies_mask            = (1 << (prog['jiffies'].type_.size * 8)) - 1 if 'jiffies' in prog else 0
+
+HAS_PRIO = prog.type('struct workqueue_attrs').has_member('prio')
+
+if HAS_PRIO:
+    HIGHPRI_PRIO = prog['HIGHPRI_PRIO']
+    rt_prio = prog.constant('RT_PRIO', filename='kernel/workqueue.c').value_()
+else:
+    HIGHPRI_NICE_LEVEL = prog['HIGHPRI_NICE_LEVEL']
 
 print('Affinity Scopes')
 print('===============')
@@ -186,13 +211,14 @@ for pi, pool in idr_for_each(worker_pool_idr):
 
 for pi, pool in idr_for_each(worker_pool_idr):
     pool = drgn.Object(prog, 'struct worker_pool', address=pool)
-    print(f'pool[{pi:0{max_pool_id_len}}] flags=0x{pool.flags.value_():02x} ref={pool.refcnt.value_():{max_ref_len}} nice={pool.attrs.nice.value_():3} ', end='')
+    nice = pool_nice(pool)
+    print(f'pool[{pi:0{max_pool_id_len}}] flags=0x{pool.flags.value_():02x} ref={pool.refcnt.value_():{max_ref_len}} nice={nice:>3} ', end='')
     print(f'idle/workers={pool.nr_idle.value_():3}/{pool.nr_workers.value_():3} ', end='')
     bh_type = None
     if pool.cpu >= 0:
         print(f'cpu={pool.cpu.value_():3}', end='')
         if pool.flags & POOL_BH:
-            bh_type = 'bh-hi' if pool.attrs.nice == HIGHPRI_NICE_LEVEL else 'bh'
+            bh_type = pool_bh_type(pool)
             print(f' {bh_type}', end='')
             if pool.flags & POOL_BH_DRAINING:
                 print(' draining', end='')

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
+// The transport header of the r570 firmware carries no message type, so nothing can produce or
+// consume a GMC message before the switch to r000. Until then the module is built as dead code.
+#[expect(dead_code)]
+pub(super) mod gmc;
 pub(super) mod rpc;
 
 use core::mem;
@@ -424,6 +428,12 @@ struct GspMessage<'a> {
 enum GspParsedMessage<'a> {
     /// A [RPC message](rpc::RpcMessage).
     Rpc(rpc::RpcMessage<'a>),
+    /// A [GMC message](gmc::GmcMessage).
+    //
+    // The transport header of the r570 firmware carries no message type, so this variant cannot
+    // be constructed before the switch to r000.
+    #[expect(dead_code)]
+    Gmc(gmc::GmcMessage<'a>),
 }
 
 impl GspParsedMessage<'_> {
@@ -431,6 +441,7 @@ impl GspParsedMessage<'_> {
     fn log(&self, dev: &device::Device) {
         match self {
             GspParsedMessage::Rpc(rpc) => rpc.log(dev),
+            GspParsedMessage::Gmc(gmc) => gmc.log(dev),
         }
     }
 }
@@ -672,27 +683,28 @@ impl CmdqInner<'_> {
     ///
     /// The message is waited for up to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
     ///
-    /// `f` is expected to return `Ok` with the result to return to the caller, and `Err(ENOMSG)` to
-    /// signal that the received message was not the one expected (such messages are dropped). Any
-    /// other error returned by `f` is propagated to the caller.
+    /// `f` is expected to return `Ok(Some(_))` with the result to return to the caller, and
+    /// `Ok(None)` to signal that the received message was not the one expected (such messages are
+    /// dropped). Errors returned by `f` are propagated to the caller.
     ///
     /// # Errors
     ///
     /// - `ETIMEDOUT` if no message satisfying `f` arrives before the deadline, however many other
     ///   messages arrive while waiting.
     /// - `EIO` if a message fails framing or checksum validation.
-    /// - Any error returned by `f` with the exception of `ENOMSG`.
-    fn await_msg_with<R>(&mut self, f: impl Fn(GspParsedMessage<'_>) -> Result<R>) -> Result<R> {
+    /// - Any error returned by `f`.
+    fn await_msg_with<R>(
+        &mut self,
+        f: impl Fn(GspParsedMessage<'_>) -> Result<Option<R>>,
+    ) -> Result<R> {
         let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
         loop {
             let remaining = deadline - Instant::<Monotonic>::now();
             if remaining.is_negative() {
                 break Err(ETIMEDOUT);
             }
-            match self.consume_element(remaining, &f)? {
-                Ok(m) => break Ok(m),
-                Err(ENOMSG) => continue,
-                Err(e) => break Err(e),
+            if let Some(m) = self.consume_element(remaining, &f)?? {
+                break Ok(m);
             }
         }
     }
@@ -714,4 +726,22 @@ impl CmdqInner<'_> {
             }
         }
     }
+}
+
+/// Helper function that trims the concatenation of `slice_1` and `slice_2` to `length`.
+///
+/// Returns the truncated `(slice_1, slice_2)` pair, or `EIO` if `length > slice_1.len() +
+/// slice_2.len()`.
+fn trim_message_slice<'a>(
+    (slice_1, slice_2): (&'a [u8], &'a [u8]),
+    length: usize,
+) -> Result<(&'a [u8], &'a [u8])> {
+    // See if `slice_1` covers the whole message, take it entirely if it doesn't.
+    let slice_1 = slice_1.get(..length).unwrap_or(slice_1);
+    // `slice_2` is the remainder of the message not covered by `slice_1`.
+    // PANIC: The line above guarantees that `slice_1.len() <= length`, so the subtraction cannot
+    // underflow.
+    let slice_2 = slice_2.get(..length - slice_1.len()).ok_or(EIO)?;
+
+    Ok((slice_1, slice_2))
 }

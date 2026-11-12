@@ -178,6 +178,16 @@ superio_exit(int ioreg)
 
 #define NCT6687DR_FAN_CTRL_MASK		(BIT(0) | BIT(1) | GENMASK(15, 10))
 
+/* Fan curves of NCT6687D-R, with a temperature and an output per point */
+#define NCT6687DR_CURVE_POINTS		7
+#define NCT6687DR_REG_CURVE_TEMP(x, p)	(0xb00 + (x) * 0x18 + (p))
+#define NCT6687DR_REG_CURVE_OUT_HI(x, p) (0xb07 + (x) * 0x18 + (p) * 2)
+#define NCT6687DR_REG_CURVE_OUT_LO(x, p) (0xb08 + (x) * 0x18 + (p) * 2)
+#define NCT6687DR_REG_CURVE_SRC(x)	(0x910 + (x) * 4)	/* 32 bit */
+#define NCT6687DR_REG_CURVE_MODE(x)	(0xa08 + (x))		/* channels 0-7 */
+#define NCT6687DR_REG_CURVE_MODE_SYS(x)	(0x240 + (x) - 10)	/* channels 10-15 */
+#define NCT6687DR_CURVE_MODE_PWM	0x40
+
 #define NCT6687DR_REG_FAN_ENGINE_STS	0xcf8
 #define NCT6687DR_FAN_ENGINE_PHASE	BIT(3)
 #define NCT6687DR_FAN_ENGINE_INVALID	BIT(4)
@@ -360,11 +370,16 @@ struct nct6683_data {
 	u8 pwm[NCT6683_NUM_REG_FAN];	/* indexed by fan channel */
 
 	u16 have_fan_ctrl;		/* channels supporting fan control */
+	u16 have_curve;			/* channels with a duty cycle curve */
 
 #ifdef CONFIG_PM
 	/* Remember extra register values over suspend/resume */
 	u8 hwm_cfg;
 #endif
+
+	/* Manual fan control set through sysfs, restored on resume */
+	u16 pwm_manual;			/* channels set to manual mode */
+	u8 pwm_cmd[NCT6683_NUM_REG_FAN];	/* their duty cycle */
 };
 
 struct nct6683_sio_data {
@@ -450,12 +465,11 @@ nct6683_create_attr_group(struct device *dev,
 	if (count == 0)
 		return ERR_PTR(-EINVAL);
 
-	group = devm_kzalloc(dev, sizeof(*group), GFP_KERNEL);
+	group = devm_kzalloc_obj(dev, *group);
 	if (group == NULL)
 		return ERR_PTR(-ENOMEM);
 
-	attrs = devm_kcalloc(dev, repeat * count + 1, sizeof(*attrs),
-			     GFP_KERNEL);
+	attrs = devm_kzalloc_objs(dev, *attrs, repeat * count + 1);
 	if (attrs == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -503,20 +517,10 @@ nct6683_create_attr_group(struct device *dev,
 	return group;
 }
 
-/* LSB is 16 mV, except for the following sources, where it is 32 mV */
-#define MON_SRC_VCC	0x60
-#define MON_SRC_VSB	0x61
-#define MON_SRC_AVSB	0x62
-#define MON_SRC_VBAT	0x64
-
-static inline long in_from_reg(u16 reg, u8 src)
+/* LSB is 16 mV */
+static inline long in_from_reg(u8 reg)
 {
-	int scale = 16;
-
-	if (src == MON_SRC_VCC || src == MON_SRC_VSB || src == MON_SRC_AVSB ||
-	    src == MON_SRC_VBAT)
-		scale <<= 1;
-	return reg * scale;
+	return reg * 16;
 }
 
 static u16 nct6683_read(struct nct6683_data *data, u16 reg)
@@ -701,7 +705,7 @@ show_in_reg(struct device *dev, struct device_attribute *attr, char *buf)
 	int nr = sattr->nr;
 
 	return sprintf(buf, "%ld\n",
-		       in_from_reg(data->in[index][nr], data->in_index[index]));
+		       in_from_reg(data->in[index][nr]));
 }
 
 static umode_t nct6683_in_is_visible(struct kobject *kobj,
@@ -1063,8 +1067,11 @@ static int nct6683_set_pwm(struct nct6683_data *data, int ch, u8 val)
 		err = nct6683_fan_ctrl_update(data, ch, true, val);
 	else
 		err = -EBUSY;
-	if (!err)
+	if (!err) {
 		data->pwm[ch] = val;
+		data->pwm_manual |= BIT(ch);
+		data->pwm_cmd[ch] = val;
+	}
 	mutex_unlock(&data->update_lock);
 
 	return err;
@@ -1141,10 +1148,17 @@ store_pwm_enable(struct device *dev, struct device_attribute *attr,
 	manual = val == 1;
 
 	mutex_lock(&data->update_lock);
-	if (nct6683_pwm_manual(data, index) != manual) {
-		/* Keep the current duty cycle when switching to manual mode */
-		cmd = manual ? nct6683_read(data, nct6683_pwm_reg(index)) : -1;
+	/* Keep the current duty cycle when switching to manual mode */
+	cmd = manual ? nct6683_read(data, nct6683_pwm_reg(index)) : -1;
+	if (nct6683_pwm_manual(data, index) != manual)
 		err = nct6683_fan_ctrl_update(data, index, manual, cmd);
+	if (!err) {
+		if (manual) {
+			data->pwm_manual |= BIT(index);
+			data->pwm_cmd[index] = cmd;
+		} else {
+			data->pwm_manual &= ~BIT(index);
+		}
 	}
 	mutex_unlock(&data->update_lock);
 
@@ -1154,16 +1168,116 @@ store_pwm_enable(struct device *dev, struct device_attribute *attr,
 SENSOR_TEMPLATE(pwm_enable, "pwm%d_enable", 0444, show_pwm_enable,
 		store_pwm_enable, 0);
 
+/* Fan curves, read from the EC on each access */
+static ssize_t
+show_pwm_auto_point_temp(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct sensor_device_attribute_2 *sattr = to_sensor_dev_attr_2(attr);
+	struct nct6683_data *data = dev_get_drvdata(dev);
+	u16 reg = NCT6687DR_REG_CURVE_TEMP(sattr->nr, sattr->index);
+	int val;
+
+	mutex_lock(&data->update_lock);
+	val = nct6683_read(data, reg);
+	mutex_unlock(&data->update_lock);
+
+	return sysfs_emit(buf, "%d\n", val * 1000);
+}
+
+static ssize_t
+show_pwm_auto_point_pwm(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct sensor_device_attribute_2 *sattr = to_sensor_dev_attr_2(attr);
+	struct nct6683_data *data = dev_get_drvdata(dev);
+	u16 reg = NCT6687DR_REG_CURVE_OUT_LO(sattr->nr, sattr->index);
+	int val;
+
+	mutex_lock(&data->update_lock);
+	val = nct6683_read(data, reg);
+	mutex_unlock(&data->update_lock);
+
+	return sysfs_emit(buf, "%d\n", val);
+}
+
+static ssize_t
+show_pwm_auto_channels_temp(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	struct sensor_device_attribute *sattr = to_sensor_dev_attr(attr);
+	struct nct6683_data *data = dev_get_drvdata(dev);
+	u16 reg = NCT6687DR_REG_CURVE_SRC(sattr->index);
+	u32 src, channels = 0;
+	int i;
+
+	mutex_lock(&data->update_lock);
+	src = (u32)nct6683_read16(data, reg) << 16 |
+	      nct6683_read16(data, reg + 2);
+	mutex_unlock(&data->update_lock);
+
+	/* Bit n of the source register selects monitoring channel n */
+	for (i = 0; i < data->temp_num; i++) {
+		if (src & BIT(data->temp_index[i])) {
+			channels |= BIT(i);
+			src &= ~BIT(data->temp_index[i]);
+		}
+	}
+
+	/* Temperature sources which are not reported cannot be mapped */
+	if (src)
+		return -ENODATA;
+
+	return sysfs_emit(buf, "%u\n", channels);
+}
+
+SENSOR_TEMPLATE(pwm_auto_channels_temp, "pwm%d_auto_channels_temp", 0444,
+		show_pwm_auto_channels_temp, NULL, 0);
+SENSOR_TEMPLATE_2(pwm_auto_point1_temp, "pwm%d_auto_point1_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 0);
+SENSOR_TEMPLATE_2(pwm_auto_point1_pwm, "pwm%d_auto_point1_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 0);
+SENSOR_TEMPLATE_2(pwm_auto_point2_temp, "pwm%d_auto_point2_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 1);
+SENSOR_TEMPLATE_2(pwm_auto_point2_pwm, "pwm%d_auto_point2_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 1);
+SENSOR_TEMPLATE_2(pwm_auto_point3_temp, "pwm%d_auto_point3_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 2);
+SENSOR_TEMPLATE_2(pwm_auto_point3_pwm, "pwm%d_auto_point3_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 2);
+SENSOR_TEMPLATE_2(pwm_auto_point4_temp, "pwm%d_auto_point4_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 3);
+SENSOR_TEMPLATE_2(pwm_auto_point4_pwm, "pwm%d_auto_point4_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 3);
+SENSOR_TEMPLATE_2(pwm_auto_point5_temp, "pwm%d_auto_point5_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 4);
+SENSOR_TEMPLATE_2(pwm_auto_point5_pwm, "pwm%d_auto_point5_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 4);
+SENSOR_TEMPLATE_2(pwm_auto_point6_temp, "pwm%d_auto_point6_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 5);
+SENSOR_TEMPLATE_2(pwm_auto_point6_pwm, "pwm%d_auto_point6_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 5);
+SENSOR_TEMPLATE_2(pwm_auto_point7_temp, "pwm%d_auto_point7_temp", 0444,
+		  show_pwm_auto_point_temp, NULL, 0, 6);
+SENSOR_TEMPLATE_2(pwm_auto_point7_pwm, "pwm%d_auto_point7_pwm", 0444,
+		  show_pwm_auto_point_pwm, NULL, 0, 6);
+
+/* pwm, pwm_enable, pwm_auto_channels_temp and the fan curve points */
+#define NCT6683_PWM_TEMPLATES	(3 + 2 * NCT6687DR_CURVE_POINTS)
+
 static umode_t nct6683_pwm_is_visible(struct kobject *kobj,
 				      struct attribute *attr, int index)
 {
 	struct device *dev = kobj_to_dev(kobj);
 	struct nct6683_data *data = dev_get_drvdata(dev);
-	int pwm = index / 2;	/* pwm index */
-	int nr = index % 2;	/* attribute index */
+	int pwm = index / NCT6683_PWM_TEMPLATES;	/* pwm index */
+	int nr = index % NCT6683_PWM_TEMPLATES;		/* attribute index */
 
 	if (!(data->have_pwm & (1 << pwm)))
 		return 0;
+
+	if (nr >= 2)	/* fan curve */
+		return (data->have_curve & BIT(pwm)) ? attr->mode : 0;
 
 	if (data->have_fan_ctrl & BIT(pwm))
 		return attr->mode | 0200;
@@ -1177,9 +1291,29 @@ static umode_t nct6683_pwm_is_visible(struct kobject *kobj,
 	return attr->mode;
 }
 
+/*
+ * nct6683_pwm_is_visible uses the index into the following array
+ * to determine if attributes should be created or not.
+ * Any change in order or content must be matched.
+ */
 static struct sensor_device_template *nct6683_attributes_pwm_template[] = {
 	&sensor_dev_template_pwm,
 	&sensor_dev_template_pwm_enable,
+	&sensor_dev_template_pwm_auto_channels_temp,	/* 2 */
+	&sensor_dev_template_pwm_auto_point1_temp,
+	&sensor_dev_template_pwm_auto_point1_pwm,
+	&sensor_dev_template_pwm_auto_point2_temp,
+	&sensor_dev_template_pwm_auto_point2_pwm,
+	&sensor_dev_template_pwm_auto_point3_temp,
+	&sensor_dev_template_pwm_auto_point3_pwm,
+	&sensor_dev_template_pwm_auto_point4_temp,
+	&sensor_dev_template_pwm_auto_point4_pwm,
+	&sensor_dev_template_pwm_auto_point5_temp,
+	&sensor_dev_template_pwm_auto_point5_pwm,
+	&sensor_dev_template_pwm_auto_point6_temp,
+	&sensor_dev_template_pwm_auto_point6_pwm,
+	&sensor_dev_template_pwm_auto_point7_temp,
+	&sensor_dev_template_pwm_auto_point7_pwm,
 	NULL
 };
 
@@ -1338,6 +1472,32 @@ static inline void nct6683_init_device(struct nct6683_data *data)
 		nct6683_write(data, NCT6683_HWM_CFG, tmp | 0x80);
 }
 
+static u16 nct6687dr_curve_mode_reg(int ch)
+{
+	return ch < 8 ? NCT6687DR_REG_CURVE_MODE(ch) :
+			NCT6687DR_REG_CURVE_MODE_SYS(ch);
+}
+
+/*
+ * A fan curve sets a duty cycle if its mode register is 0x40 and the high
+ * byte of each output is zero. The low byte then holds the duty cycle.
+ */
+static bool nct6687dr_curve_is_pwm(struct nct6683_data *data, int ch)
+{
+	int p;
+
+	if (nct6683_read(data, nct6687dr_curve_mode_reg(ch)) !=
+	    NCT6687DR_CURVE_MODE_PWM)
+		return false;
+
+	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++) {
+		if (nct6683_read(data, NCT6687DR_REG_CURVE_OUT_HI(ch, p)))
+			return false;
+	}
+
+	return true;
+}
+
 /*
  * There are a total of 24 fan inputs. Each can be configured as input
  * or as output. A maximum of 16 inputs and 8 outputs is configurable.
@@ -1370,6 +1530,13 @@ nct6683_setup_fans(struct nct6683_data *data)
 		data->have_fan_ctrl = NCT6687DR_FAN_CTRL_MASK &
 			(data->have_pwm | (data->have_fan & GENMASK(15, 8)));
 		data->have_pwm |= data->have_fan_ctrl;
+
+		/* Only report fan curves which set a duty cycle */
+		for (i = 0; i < NCT6683_NUM_REG_FAN; i++) {
+			if ((data->have_fan_ctrl & BIT(i)) &&
+			    nct6687dr_curve_is_pwm(data, i))
+				data->have_curve |= BIT(i);
+		}
 	}
 }
 
@@ -1431,7 +1598,7 @@ static int nct6683_probe(struct platform_device *pdev)
 	if (!devm_request_region(dev, res->start, IOREGION_LENGTH, DRVNAME))
 		return -EBUSY;
 
-	data = devm_kzalloc(dev, sizeof(struct nct6683_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct nct6683_data);
 	if (!data)
 		return -ENOMEM;
 
@@ -1560,10 +1727,27 @@ static int nct6683_suspend(struct device *dev)
 static int nct6683_resume(struct device *dev)
 {
 	struct nct6683_data *data = dev_get_drvdata(dev);
+	unsigned long manual;
+	int ch, err;
 
 	mutex_lock(&data->update_lock);
 
 	nct6683_write(data, NCT6683_HWM_CFG, data->hwm_cfg);
+
+	/* The BIOS may switch the fans back to automatic mode */
+	manual = data->pwm_manual;
+	for_each_set_bit(ch, &manual, NCT6683_NUM_REG_FAN) {
+		if (nct6683_pwm_manual(data, ch))
+			continue;
+		err = nct6683_fan_ctrl_update(data, ch, true, data->pwm_cmd[ch]);
+		if (err) {
+			dev_warn(dev, "Failed to restore manual mode of pwm%d: %d\n",
+				 ch + 1, err);
+			/* The EC does not respond, skip the remaining channels */
+			if (err == -ETIMEDOUT)
+				break;
+		}
+	}
 
 	/* Force re-reading all values */
 	data->valid = false;

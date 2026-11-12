@@ -224,7 +224,7 @@ static int apple_sart_probe(struct platform_device *pdev)
 	struct apple_sart *sart;
 	struct device *dev = &pdev->dev;
 
-	sart = devm_kzalloc(dev, sizeof(*sart), GFP_KERNEL);
+	sart = devm_kzalloc_obj(dev, *sart);
 	if (!sart)
 		return -ENOMEM;
 
@@ -299,8 +299,8 @@ static int sart_set_entry(struct apple_sart *sart, int index, u8 flags,
 	if (paddr & ((1 << sart->ops->paddr_shift) - 1))
 		return -EINVAL;
 
-	paddr >>= sart->ops->size_shift;
-	size >>= sart->ops->paddr_shift;
+	paddr >>= sart->ops->paddr_shift;
+	size >>= sart->ops->size_shift;
 
 	if (size > sart->ops->size_max)
 		return -EINVAL;

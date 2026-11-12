@@ -771,7 +771,7 @@ static int msm_gpio_init_valid_mask(struct gpio_chip *gc,
 	if (ret > ngpios)
 		return -EINVAL;
 
-	tmp = kmalloc_array(len, sizeof(*tmp), GFP_KERNEL);
+	tmp = kmalloc_objs(*tmp, len);
 	if (!tmp)
 		return -ENOMEM;
 
@@ -1117,11 +1117,13 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 		u32 addr = pctrl->phys_base[0] + reg;
 		int ret;
 
-		qcom_scm_io_readl(addr, &val);
-		val &= ~(intr_target_mask << g->intr_target_bit);
-		val |= g->intr_target_kpss_val << g->intr_target_bit;
+		ret = qcom_scm_io_readl(addr, &val);
+		if (!ret) {
+			val &= ~(intr_target_mask << g->intr_target_bit);
+			val |= g->intr_target_kpss_val << g->intr_target_bit;
 
-		ret = qcom_scm_io_writel(addr, val);
+			ret = qcom_scm_io_writel(addr, val);
+		}
 		if (ret)
 			dev_err(pctrl->dev,
 				"Failed routing %lu interrupt to Apps proc",
@@ -1504,8 +1506,7 @@ static int msm_gpio_init(struct msm_pinctrl *pctrl)
 	girq->parent_handler = msm_gpio_irq_handler;
 	girq->fwnode = dev_fwnode(pctrl->dev);
 	girq->num_parents = 1;
-	girq->parents = devm_kcalloc(pctrl->dev, 1, sizeof(*girq->parents),
-				     GFP_KERNEL);
+	girq->parents = devm_kzalloc_objs(pctrl->dev, *girq->parents, 1);
 	if (!girq->parents)
 		return -ENOMEM;
 	girq->default_type = IRQ_TYPE_NONE;
@@ -1561,9 +1562,15 @@ static void msm_ps_hold_poweroff(void)
 	msm_ps_hold_restart(&data);
 }
 
+static void msm_pinctrl_clear_poweroff(void *data)
+{
+	poweroff_pctrl = NULL;
+	pm_power_off = NULL;
+}
+
 static void msm_pinctrl_setup_pm_reset(struct msm_pinctrl *pctrl)
 {
-	int i;
+	int i, ret;
 	const struct pinfunction *func = pctrl->soc->functions;
 
 	for (i = 0; i < pctrl->soc->nfunctions; i++)
@@ -1577,6 +1584,13 @@ static void msm_pinctrl_setup_pm_reset(struct msm_pinctrl *pctrl)
 					"failed to setup restart handler.\n");
 			poweroff_pctrl = pctrl;
 			pm_power_off = msm_ps_hold_poweroff;
+
+			ret = devm_add_action_or_reset(pctrl->dev,
+					msm_pinctrl_clear_poweroff, NULL);
+			if (ret)
+				dev_err(pctrl->dev,
+					"Failed to register the poweroff cleanup action.\n");
+
 			break;
 		}
 }
@@ -1736,7 +1750,7 @@ int msm_pinctrl_probe(struct platform_device *pdev,
 	int ret;
 	int i;
 
-	pctrl = devm_kzalloc(&pdev->dev, sizeof(*pctrl), GFP_KERNEL);
+	pctrl = devm_kzalloc_obj(&pdev->dev, *pctrl);
 	if (!pctrl)
 		return -ENOMEM;
 

@@ -355,7 +355,7 @@ int nfsd_nl_expkey_get_reqs_dumpit(struct sk_buff *skb,
 	}
 
 	items = kzalloc_objs(*items, cnt);
-	seqnos = kcalloc(cnt, sizeof(*seqnos), GFP_KERNEL);
+	seqnos = kzalloc_objs(*seqnos, cnt);
 	if (!items || !seqnos) {
 		ret = -ENOMEM;
 		goto out_alloc;
@@ -682,7 +682,7 @@ int nfsd_nl_svc_export_get_reqs_dumpit(struct sk_buff *skb,
 	}
 
 	items = kzalloc_objs(*items, cnt);
-	seqnos = kcalloc(cnt, sizeof(*seqnos), GFP_KERNEL);
+	seqnos = kzalloc_objs(*seqnos, cnt);
 	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!items || !seqnos || !pathbuf) {
 		ret = -ENOMEM;

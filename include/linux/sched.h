@@ -907,6 +907,8 @@ struct task_struct {
 	 */
 	int				recent_used_cpu;
 	int				wake_cpu;
+	/* CPU charged while is_blocked && in_iowait. */
+	int				iowait_cpu;
 
 	int				prio;
 	int				static_prio;
@@ -2556,3 +2558,5 @@ extern void migrate_enable(void);
 DEFINE_LOCK_GUARD_0(migrate, migrate_disable(), migrate_enable())
 
 #endif
+
+struct task_struct *cpu_curr_snapshot_rcu(int cpu);

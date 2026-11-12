@@ -175,14 +175,7 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 	struct sensor_hub_data *pdata = hid_get_drvdata(hsdev->hdev);
 	unsigned long flags;
 
-	/*
-	 * sensor_hub_raw_event() holds pdata->lock while it looks up a
-	 * callback and calls it.  Taking it here too means no report is
-	 * still using the callback once it is unlinked, so its owner may
-	 * free it as soon as this returns.
-	 */
-	spin_lock_irqsave(&pdata->lock, flags);
-	spin_lock(&pdata->dyn_callback_lock);
+	spin_lock_irqsave(&pdata->dyn_callback_lock, flags);
 	list_for_each_entry(callback, &pdata->dyn_callback_list, list)
 		if (callback->usage_id == usage_id &&
 						callback->hsdev == hsdev) {
@@ -190,8 +183,7 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 			kfree(callback);
 			break;
 		}
-	spin_unlock(&pdata->dyn_callback_lock);
-	spin_unlock_irqrestore(&pdata->lock, flags);
+	spin_unlock_irqrestore(&pdata->dyn_callback_lock, flags);
 
 	return 0;
 }
@@ -728,7 +720,7 @@ static int sensor_hub_probe(struct hid_device *hdev,
 	struct hid_sensor_hub_device *last_hsdev = NULL;
 	struct hid_sensor_hub_device *collection_hsdev = NULL;
 
-	sd = devm_kzalloc(&hdev->dev, sizeof(*sd), GFP_KERNEL);
+	sd = devm_kzalloc_obj(&hdev->dev, *sd);
 	if (!sd) {
 		hid_err(hdev, "cannot allocate Sensor data\n");
 		return -ENOMEM;
@@ -760,10 +752,9 @@ static int sensor_hub_probe(struct hid_device *hdev,
 		ret = -EINVAL;
 		goto err_stop_hw;
 	}
-	sd->hid_sensor_hub_client_devs = devm_kcalloc(&hdev->dev,
-						      dev_cnt,
-						      sizeof(struct mfd_cell),
-						      GFP_KERNEL);
+	sd->hid_sensor_hub_client_devs = devm_kzalloc_objs(&hdev->dev,
+							   struct mfd_cell,
+							   dev_cnt);
 	if (sd->hid_sensor_hub_client_devs == NULL) {
 		hid_err(hdev, "Failed to allocate memory for mfd cells\n");
 		ret = -ENOMEM;
@@ -776,8 +767,7 @@ static int sensor_hub_probe(struct hid_device *hdev,
 		if (collection->type == HID_COLLECTION_PHYSICAL ||
 		    collection->type == HID_COLLECTION_APPLICATION) {
 
-			hsdev = devm_kzalloc(&hdev->dev, sizeof(*hsdev),
-					     GFP_KERNEL);
+			hsdev = devm_kzalloc_obj(&hdev->dev, *hsdev);
 			if (!hsdev) {
 				hid_err(hdev, "cannot allocate hid_sensor_hub_device\n");
 				ret = -ENOMEM;
@@ -787,9 +777,8 @@ static int sensor_hub_probe(struct hid_device *hdev,
 			hsdev->vendor_id = hdev->vendor;
 			hsdev->product_id = hdev->product;
 			hsdev->usage = collection->usage;
-			hsdev->mutex_ptr = devm_kzalloc(&hdev->dev,
-							sizeof(struct mutex),
-							GFP_KERNEL);
+			hsdev->mutex_ptr = devm_kzalloc_obj(&hdev->dev,
+							    struct mutex);
 			if (!hsdev->mutex_ptr) {
 				ret = -ENOMEM;
 				goto err_stop_hw;

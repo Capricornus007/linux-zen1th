@@ -57,6 +57,7 @@
 #include <linux/pgalloc_tag.h>
 #include <asm/div64.h>
 #include "internal.h"
+#include "memory-failure.h"
 #include "mm_init.h"
 #include "page_alloc.h"
 #include "shuffle.h"
@@ -679,32 +680,16 @@ static inline bool pcp_allowed_order(unsigned int order)
  * This usage means that zero-order pages may not be compound.
  */
 
-static void __prep_compound_head_and_tail(struct page *page, unsigned int order)
+void prep_compound_page(struct page *page, unsigned int order)
 {
 	int i;
 	int nr_pages = 1 << order;
 
+	__SetPageHead(page);
 	for (i = 1; i < nr_pages; i++)
 		prep_compound_tail(page + i, page, order);
 
 	prep_compound_head(page, order);
-}
-
-void prep_compound_page(struct page *page, unsigned int order)
-{
-	__SetPageHead(page);
-	__prep_compound_head_and_tail(page, order);
-}
-
-/*
- * PG_head is set atomically whereas the other metadata is set with plain stores.
- * It should be used when @page's flags can be modified concurrently,
- * e.g., in __split_folio_to_order().
- */
-void prep_compound_page_atomic(struct page *page, unsigned int order)
-{
-	SetPageHead(page);
-	__prep_compound_head_and_tail(page, order);
 }
 
 static inline void set_buddy_order(struct page *page, unsigned int order)
@@ -1254,7 +1239,7 @@ void __pgalloc_tag_add(struct page *page, struct task_struct *task,
 	union codetag_ref ref;
 
 	if (likely(get_page_tag_ref(page, &ref, &handle))) {
-		alloc_tag_add(&ref, task->alloc_tag, PAGE_SIZE * nr);
+		alloc_tag_add(&ref, task->alloc_tag, PAGE_SIZE * nr, page);
 		update_page_tag_ref(handle, &ref);
 		put_page_tag_ref(handle);
 	} else {
@@ -1283,7 +1268,7 @@ void __pgalloc_tag_sub(struct page *page, unsigned int nr)
 	union codetag_ref ref;
 
 	if (get_page_tag_ref(page, &ref, &handle)) {
-		alloc_tag_sub(&ref, PAGE_SIZE * nr);
+		alloc_tag_sub(&ref, PAGE_SIZE * nr, page);
 		update_page_tag_ref(handle, &ref);
 		put_page_tag_ref(handle);
 	}
@@ -6470,8 +6455,8 @@ void __init setup_per_cpu_pageset(void)
 
 __meminit void zone_pcp_init(struct zone *zone)
 {
-	/* A node which is added again, see zone_pcp_reset(). */
-	if (zone->per_cpu_pageset && zone->per_cpu_pageset != &boot_pageset)
+	/* This initialization only needs to be done once */
+	if (zone->per_cpu_pageset)
 		return;
 
 	/*

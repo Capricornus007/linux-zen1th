@@ -314,7 +314,7 @@ static ssize_t sta_agg_status_do_read(struct wiphy *wiphy, struct file *file,
 	p += scnprintf(p, bufsz + buf - p, "next dialog_token: %#02x\n",
 			sta->ampdu_mlme.dialog_token_allocator + 1);
 	p += scnprintf(p, bufsz + buf - p,
-		       "TID\t\tRX\tDTKN\tSSN\t\tTX\tDTKN\tpending\n");
+		       "TID\t\tRX\tDTKN\tSSN\t\tTX\tDTKN\tpending\tbuf_size\n");
 
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++) {
 		bool tid_rx_valid;
@@ -337,6 +337,8 @@ static ssize_t sta_agg_status_do_read(struct wiphy *wiphy, struct file *file,
 				tid_tx ? tid_tx->dialog_token : 0);
 		p += scnprintf(p, bufsz + buf - p, "\t%03d",
 				tid_tx ? skb_queue_len(&tid_tx->pending) : 0);
+		p += scnprintf(p, bufsz + buf - p, "\t%d",
+				tid_tx ? tid_tx->buf_size : 0);
 		p += scnprintf(p, bufsz + buf - p, "\n");
 	}
 
@@ -348,7 +350,7 @@ static ssize_t sta_agg_status_read(struct file *file, char __user *userbuf,
 {
 	struct sta_info *sta = file->private_data;
 	struct wiphy *wiphy = sta->local->hw.wiphy;
-	size_t bufsz = 71 + IEEE80211_NUM_TIDS * 40;
+	size_t bufsz = 80 + IEEE80211_NUM_TIDS * 45;
 	char *buf = kmalloc(bufsz, GFP_KERNEL);
 	ssize_t ret;
 
@@ -366,8 +368,8 @@ static ssize_t sta_agg_status_read(struct file *file, char __user *userbuf,
 static ssize_t sta_agg_status_do_write(struct wiphy *wiphy, struct file *file,
 				       char *buf, size_t count, void *data)
 {
+	bool start = false, tx, bar = false;
 	struct sta_info *sta = data;
-	bool start, tx;
 	unsigned long tid;
 	char *pos = buf;
 	int ret, timeout = 5000;
@@ -392,6 +394,10 @@ static ssize_t sta_agg_status_do_write(struct wiphy *wiphy, struct file *file,
 			return -EINVAL;
 	} else if (!strcmp(buf, "stop")) {
 		start = false;
+	} else if (!strcmp(buf, "bar")) {
+		if (!tx)
+			return -EINVAL;
+		bar = true;
 	} else {
 		return -EINVAL;
 	}
@@ -408,6 +414,24 @@ static ssize_t sta_agg_status_do_write(struct wiphy *wiphy, struct file *file,
 	ret = kstrtoul(buf, 0, &tid);
 	if (ret || tid >= IEEE80211_NUM_TIDS)
 		return -EINVAL;
+
+	if (bar) {
+		unsigned long ssn;
+
+		buf = strsep(&pos, " ");
+		if (buf) {
+			ret = kstrtoul(buf, 0, &ssn);
+			if (ret || ssn > IEEE80211_MAX_SN)
+				return -EINVAL;
+			ssn = IEEE80211_SN_TO_SEQ(ssn);
+		} else {
+			/* only correct if the driver uses mac80211's SNs */
+			ssn = sta->tid_seq[tid];
+		}
+
+		ieee80211_send_bar(&sta->sdata->vif, sta->sta.addr, tid, ssn);
+		return count;
+	}
 
 	if (tx) {
 		if (start)

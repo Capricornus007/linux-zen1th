@@ -522,6 +522,9 @@ static void ieee80211_restart_work(struct work_struct *work)
 	/* wait for all packet processing to be done */
 	synchronize_net();
 
+	/* finish removing stations before the driver is reconfigured */
+	sta_info_destroy_flush(local);
+
 	ret = ieee80211_reconfig(local);
 	wiphy_unlock(local->hw.wiphy);
 
@@ -607,7 +610,6 @@ static int ieee80211_ifa_changed(struct notifier_block *nb,
 	 * by the !wdev->registered check above.
 	 */
 	mutex_lock_nested(&local->hw.wiphy->mtx, 1);
-	__acquire(&local->hw.wiphy->mtx);
 
 	/* Copy the addresses to the vif config list */
 	ifa = rtnl_dereference(idev->ifa_list);
@@ -1728,6 +1730,7 @@ void ieee80211_unregister_hw(struct ieee80211_hw *hw)
 
 	wiphy_lock(local->hw.wiphy);
 	wiphy_delayed_work_cancel(local->hw.wiphy, &local->roc_work);
+	wiphy_rcu_work_cancel(local->hw.wiphy, &local->sta_destroy_work);
 	wiphy_work_cancel(local->hw.wiphy, &local->reconfig_filter);
 	wiphy_work_cancel(local->hw.wiphy, &local->sched_scan_stopped_work);
 	wiphy_work_cancel(local->hw.wiphy, &local->radar_detected_work);

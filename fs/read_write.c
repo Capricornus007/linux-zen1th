@@ -333,45 +333,25 @@ loff_t default_llseek(struct file *file, loff_t offset, int whence)
 {
 	struct inode *inode = file_inode(file);
 	loff_t retval;
+	int ret;
 
 	retval = inode_lock_killable(inode);
 	if (retval)
 		return retval;
-	switch (whence) {
-		case SEEK_END:
-			offset += i_size_read(inode);
-			break;
-		case SEEK_CUR:
-			if (offset == 0) {
-				retval = file->f_pos;
-				goto out;
-			}
-			offset += file->f_pos;
-			break;
-		case SEEK_DATA:
-			/*
-			 * In the generic case the entire file is data, so as
-			 * long as offset isn't at the end of the file then the
-			 * offset is data.
-			 */
-			if (offset >= inode->i_size) {
-				retval = -ENXIO;
-				goto out;
-			}
-			break;
-		case SEEK_HOLE:
-			/*
-			 * There is a virtual hole at the end of the file, so
-			 * as long as offset isn't i_size or larger, return
-			 * i_size.
-			 */
-			if (offset >= inode->i_size) {
-				retval = -ENXIO;
-				goto out;
-			}
-			offset = inode->i_size;
-			break;
+
+	ret = must_set_pos(file, &offset, whence, i_size_read(inode));
+	if (ret < 0) {
+		retval = ret;
+		goto out;
 	}
+	if (ret == 0) {
+		retval = offset;
+		goto out;
+	}
+
+	if (whence == SEEK_CUR)
+		offset += file->f_pos;
+
 	retval = -EINVAL;
 	if (offset >= 0 || unsigned_offsets(file)) {
 		if (offset != file->f_pos)
@@ -2029,7 +2009,8 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	if (!(fd_file(in)->f_mode & FMODE_READ))
 		return -EBADF;
 	if (!ppos) {
-		pos = fd_file(in)->f_pos;
+		/* f_pos is not locked here; racing updates are benign */
+		pos = data_race(fd_file(in)->f_pos);
 	} else {
 		pos = *ppos;
 		if (!(fd_file(in)->f_mode & FMODE_PREAD))
@@ -2051,13 +2032,15 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		return -EBADF;
 	in_inode = file_inode(fd_file(in));
 	out_inode = file_inode(fd_file(out));
-	out_pos = fd_file(out)->f_pos;
+	/* see above */
+	out_pos = data_race(fd_file(out)->f_pos);
 
 	if (!max)
 		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
 
 	if (unlikely(pos + count > max)) {
-		if (pos >= max)
+		if (pos > max ||
+		    (pos == max && pos != i_size_read(in_inode)))
 			return -EOVERFLOW;
 		count = max - pos;
 	}
@@ -2092,11 +2075,12 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		add_wchar(current, retval);
 		fsnotify_access(fd_file(in));
 		fsnotify_modify(fd_file(out));
-		fd_file(out)->f_pos = out_pos;
+		/* see above */
+		data_race(fd_file(out)->f_pos = out_pos);
 		if (ppos)
 			*ppos = pos;
 		else
-			fd_file(in)->f_pos = pos;
+			data_race(fd_file(in)->f_pos = pos); /* see above */
 	}
 
 	inc_syscr(current);

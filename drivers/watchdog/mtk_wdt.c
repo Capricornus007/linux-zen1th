@@ -504,7 +504,7 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 	const struct mtk_wdt_data *wdt_data;
 	int err, irq;
 
-	mtk_wdt = devm_kzalloc(dev, sizeof(*mtk_wdt), GFP_KERNEL);
+	mtk_wdt = devm_kzalloc_obj(dev, *mtk_wdt);
 	if (!mtk_wdt)
 		return -ENOMEM;
 
@@ -550,6 +550,18 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 	mtk_wdt->reset_by_toprgu =
 		of_property_read_bool(dev->of_node, "mediatek,reset-by-toprgu");
 
+	wdt_data = of_device_get_match_data(dev);
+	if (wdt_data) {
+		mtk_wdt->toprgu_sw_rst_num = wdt_data->toprgu_sw_rst_num;
+		mtk_wdt->toprgu_sw_rst_tb = wdt_data->toprgu_sw_rst_tb;
+		mtk_wdt->has_swsysrst_en = wdt_data->has_swsysrst_en;
+
+		err = toprgu_register_reset_controller(pdev,
+						       wdt_data->toprgu_sw_rst_num);
+		if (err)
+			return err;
+	}
+
 	mtk_wdt_init(&mtk_wdt->wdt_dev);
 
 	watchdog_stop_on_reboot(&mtk_wdt->wdt_dev);
@@ -562,18 +574,6 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 
 	dev_info(dev, "Watchdog enabled (timeout=%d sec, nowayout=%d)\n",
 		 mtk_wdt->wdt_dev.timeout, nowayout);
-
-	wdt_data = of_device_get_match_data(dev);
-	if (wdt_data) {
-		mtk_wdt->toprgu_sw_rst_num = wdt_data->toprgu_sw_rst_num;
-		mtk_wdt->toprgu_sw_rst_tb = wdt_data->toprgu_sw_rst_tb;
-		mtk_wdt->has_swsysrst_en = wdt_data->has_swsysrst_en;
-
-		err = toprgu_register_reset_controller(pdev,
-						       wdt_data->toprgu_sw_rst_num);
-		if (err)
-			return err;
-	}
 
 	return 0;
 }

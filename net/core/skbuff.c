@@ -92,6 +92,8 @@
 #include <linux/capability.h>
 #include <linux/user_namespace.h>
 #include <linux/indirect_call_wrapper.h>
+#include <linux/io_uring/net.h>
+#include <linux/static_call.h>
 #include <linux/textsearch.h>
 
 #include "dev.h"
@@ -967,6 +969,7 @@ int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
 
 	skb_reserve(nskb, headroom);
 	skb_copy_header(nskb, skb);
+	nskb->mac_len = skb->mac_len;
 	skb_mark_for_recycle(nskb);
 
 	err = skb_copy_bits(skb, 0, nskb->data, size);
@@ -1495,6 +1498,10 @@ void napi_skb_free_stolen_head(struct sk_buff *skb)
 		skb_orphan(skb);
 		skb->slow_gro = 0;
 	}
+	if (skb->fclone != SKB_FCLONE_UNAVAILABLE) {
+		kfree_skbmem(skb);
+		return;
+	}
 	napi_skb_cache_put(skb);
 }
 
@@ -1737,7 +1744,7 @@ static struct ubuf_info *msg_zerocopy_alloc(struct sock *sk, size_t size,
 		return NULL;
 	}
 
-	uarg->ubuf.ops = &msg_zerocopy_ubuf_ops;
+	uarg->ubuf.type = UBUF_TYPE_MSG_ZEROCOPY;
 	uarg->id = ((u32)atomic_inc_return(&sk->sk_zckey)) - 1;
 	uarg->len = 1;
 	uarg->bytelen = size;
@@ -1763,7 +1770,7 @@ struct ubuf_info *msg_zerocopy_realloc(struct sock *sk, size_t size,
 		u32 bytelen, next;
 
 		/* there might be non MSG_ZEROCOPY users */
-		if (uarg->ops != &msg_zerocopy_ubuf_ops)
+		if (uarg->type != UBUF_TYPE_MSG_ZEROCOPY)
 			return NULL;
 
 		/* realloc only when socket is locked (TCP, UDP cork),
@@ -1898,20 +1905,83 @@ void msg_zerocopy_put_abort(struct ubuf_info *uarg, bool have_uref)
 }
 EXPORT_SYMBOL_GPL(msg_zerocopy_put_abort);
 
-const struct ubuf_info_ops msg_zerocopy_ubuf_ops = {
-	.complete = msg_zerocopy_complete,
-};
-EXPORT_SYMBOL_GPL(msg_zerocopy_ubuf_ops);
+static void net_zcopy_unregistered(struct sk_buff *skb, struct ubuf_info *uarg,
+				   bool zerocopy_success)
+{
+	DEBUG_NET_WARN_ON_ONCE(1);
+}
+
+DEFINE_STATIC_CALL(ubuf_complete_tpacket, net_zcopy_unregistered);
+DEFINE_STATIC_CALL(ubuf_complete_vhost, net_zcopy_unregistered);
+DEFINE_STATIC_CALL(ubuf_complete_xenvif, net_zcopy_unregistered);
+
+void net_zcopy_register(enum ubuf_info_type type, ubuf_complete_fn fn)
+{
+	ubuf_complete_fn cur;
+	bool reg = fn;
+
+	if (!fn)
+		fn = net_zcopy_unregistered;
+
+	switch (type) {
+	case UBUF_TYPE_TPACKET:
+		cur = static_call_query(ubuf_complete_tpacket);
+		static_call_update(ubuf_complete_tpacket, fn);
+		break;
+	case UBUF_TYPE_VHOST:
+		cur = static_call_query(ubuf_complete_vhost);
+		static_call_update(ubuf_complete_vhost, fn);
+		break;
+	case UBUF_TYPE_XENVIF:
+		cur = static_call_query(ubuf_complete_xenvif);
+		static_call_update(ubuf_complete_xenvif, fn);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return;
+	}
+
+	WARN_ON_ONCE(reg ? cur != net_zcopy_unregistered :
+			   cur == net_zcopy_unregistered);
+}
+EXPORT_SYMBOL_GPL(net_zcopy_register);
+
+void net_zcopy_complete(struct sk_buff *skb, struct ubuf_info *uarg,
+			bool zerocopy_success)
+{
+	switch (uarg->type) {
+	case UBUF_TYPE_MSG_ZEROCOPY:
+		msg_zerocopy_complete(skb, uarg, zerocopy_success);
+		break;
+	case UBUF_TYPE_IO_URING:
+		io_tx_ubuf_complete(skb, uarg, zerocopy_success);
+		break;
+	case UBUF_TYPE_TPACKET:
+		static_call(ubuf_complete_tpacket)(skb, uarg, zerocopy_success);
+		break;
+	case UBUF_TYPE_VHOST:
+		static_call(ubuf_complete_vhost)(skb, uarg, zerocopy_success);
+		break;
+	case UBUF_TYPE_XENVIF:
+		static_call(ubuf_complete_xenvif)(skb, uarg, zerocopy_success);
+		break;
+	default:
+		DEBUG_NET_WARN_ON_ONCE(1);
+		break;
+	}
+}
+EXPORT_SYMBOL_GPL(net_zcopy_complete);
 
 int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
 			     struct msghdr *msg, int len,
 			     struct ubuf_info *uarg,
 			     struct net_devmem_dmabuf_binding *binding)
 {
+	unsigned int orig_truesize = skb->truesize;
 	int err, orig_len = skb->len;
 
-	if (uarg->ops->link_skb) {
-		err = uarg->ops->link_skb(skb, uarg);
+	if (uarg->type == UBUF_TYPE_IO_URING) {
+		err = io_link_skb(skb, uarg);
 		if (err)
 			return err;
 	} else {
@@ -1928,12 +1998,18 @@ int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
 	err = __zerocopy_sg_from_iter(msg, sk, skb, &msg->msg_iter, len,
 				      binding);
 	if (err == -EFAULT || (err == -EMSGSIZE && skb->len == orig_len)) {
+		u32 delta_truesize = skb->truesize - orig_truesize;
 		struct sock *save_sk = skb->sk;
 
 		/* Streams do not free skb on error. Reset to prev state. */
 		iov_iter_revert(&msg->msg_iter, skb->len - orig_len);
 		skb->sk = sk;
-		___pskb_trim(skb, orig_len);
+		if (!___pskb_trim(skb, orig_len)) {
+			skb->truesize -= delta_truesize;
+			sk_wmem_queued_add(sk, -delta_truesize);
+			if (!skb_zcopy_pure(skb))
+				sk_mem_uncharge(sk, delta_truesize);
+		}
 		skb->sk = save_sk;
 		return err;
 	}
@@ -3281,7 +3357,7 @@ int skb_splice_bits(struct sk_buff *skb, struct sock *sk, unsigned int offset,
 		.pages = pages,
 		.partial = partial,
 		.nr_pages_max = MAX_SKB_FRAGS,
-		.ops = &nosteal_pipe_buf_ops,
+		.ops = &default_pipe_buf_ops,
 		.spd_release = sock_spd_release,
 	};
 	int ret = 0;
@@ -6263,7 +6339,7 @@ void kfree_skb_partial(struct sk_buff *skb, bool head_stolen)
 {
 	if (head_stolen) {
 		skb_release_head_state(skb);
-		kmem_cache_free(net_hotdata.skbuff_cache, skb);
+		kfree_skbmem(skb);
 	} else {
 		__kfree_skb(skb);
 	}

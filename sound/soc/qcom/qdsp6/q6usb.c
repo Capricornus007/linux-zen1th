@@ -82,6 +82,7 @@ static int q6usb_hw_params(struct snd_pcm_substream *substream,
 	/* Notify audio DSP about the devices being offloaded */
 	ret = afe_port_send_usb_dev_param(q6usb_afe, sdev->card_idx,
 					  sdev->ppcm_idx[sdev->num_playback - 1]);
+	q6afe_port_put(q6usb_afe);
 
 out:
 	mutex_unlock(&data->mutex);
@@ -374,7 +375,7 @@ static int q6usb_dai_dev_probe(struct platform_device *pdev)
 	struct of_phandle_args args;
 	int ret;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 

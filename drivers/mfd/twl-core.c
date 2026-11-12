@@ -772,8 +772,7 @@ twl_probe(struct i2c_client *client)
 		goto out;
 	}
 
-	twl_priv = devm_kzalloc(&client->dev, sizeof(struct twl_private),
-				GFP_KERNEL);
+	twl_priv = devm_kzalloc_obj(&client->dev, struct twl_private);
 	if (!twl_priv) {
 		status = -ENOMEM;
 		goto out;

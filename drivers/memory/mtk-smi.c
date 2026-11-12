@@ -691,7 +691,7 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int ret;
 
-	larb = devm_kzalloc(dev, sizeof(*larb), GFP_KERNEL);
+	larb = devm_kzalloc_obj(dev, *larb);
 	if (!larb)
 		return -ENOMEM;
 
@@ -937,7 +937,7 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 	struct mtk_smi *common;
 	int ret, clk_required = MTK_SMI_COM_REQ_CLK_NR;
 
-	common = devm_kzalloc(dev, sizeof(*common), GFP_KERNEL);
+	common = devm_kzalloc_obj(dev, *common);
 	if (!common)
 		return -ENOMEM;
 	common->dev = dev;

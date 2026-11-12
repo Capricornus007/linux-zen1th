@@ -114,8 +114,7 @@ static int tegra186_bpmp_channel_init(struct tegra_bpmp_channel *channel,
 	unsigned int offset;
 	int err;
 
-	channel->ivc = devm_kzalloc(bpmp->dev, sizeof(*channel->ivc),
-				    GFP_KERNEL);
+	channel->ivc = devm_kzalloc_obj(bpmp->dev, *channel->ivc);
 	if (!channel->ivc)
 		return -ENOMEM;
 
@@ -329,7 +328,7 @@ static int tegra186_bpmp_init(struct tegra_bpmp *bpmp)
 	if (err < 0)
 		return err;
 
-	priv = devm_kzalloc(bpmp->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(bpmp->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

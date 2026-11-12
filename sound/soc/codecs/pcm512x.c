@@ -601,12 +601,11 @@ static int pcm512x_dai_startup_master(struct snd_pcm_substream *substream,
 					   SNDRV_PCM_HW_PARAM_FRAME_BITS,
 					   SNDRV_PCM_HW_PARAM_CHANNELS, -1);
 
-	constraints_no_pll = devm_kzalloc(dev, sizeof(*constraints_no_pll),
-					  GFP_KERNEL);
+	constraints_no_pll = devm_kzalloc_obj(dev, *constraints_no_pll);
 	if (!constraints_no_pll)
 		return -ENOMEM;
 	constraints_no_pll->nrats = 1;
-	rats_no_pll = devm_kzalloc(dev, sizeof(*rats_no_pll), GFP_KERNEL);
+	rats_no_pll = devm_kzalloc_obj(dev, *rats_no_pll);
 	if (!rats_no_pll)
 		return -ENOMEM;
 	constraints_no_pll->rats = rats_no_pll;
@@ -1574,7 +1573,7 @@ int pcm512x_probe(struct device *dev, struct regmap *regmap)
 	struct pcm512x_priv *pcm512x;
 	int i, ret;
 
-	pcm512x = devm_kzalloc(dev, sizeof(struct pcm512x_priv), GFP_KERNEL);
+	pcm512x = devm_kzalloc_obj(dev, struct pcm512x_priv);
 	if (!pcm512x)
 		return -ENOMEM;
 
@@ -1772,24 +1771,31 @@ static int pcm512x_resume(struct device *dev)
 				    pcm512x->supplies);
 	if (ret != 0) {
 		dev_err(dev, "Failed to enable supplies: %d\n", ret);
-		return ret;
+		goto err_sclk;
 	}
 
 	regcache_cache_only(pcm512x->regmap, false);
 	ret = regcache_sync(pcm512x->regmap);
 	if (ret != 0) {
 		dev_err(dev, "Failed to sync cache: %d\n", ret);
-		return ret;
+		goto err_supplies;
 	}
 
 	ret = regmap_update_bits(pcm512x->regmap, PCM512x_POWER,
 				 PCM512x_RQPD, 0);
 	if (ret != 0) {
 		dev_err(dev, "Failed to remove power down: %d\n", ret);
-		return ret;
+		goto err_supplies;
 	}
 
 	return 0;
+
+err_supplies:
+	regulator_bulk_disable(ARRAY_SIZE(pcm512x->supplies), pcm512x->supplies);
+err_sclk:
+	if (!IS_ERR(pcm512x->sclk))
+		clk_disable_unprepare(pcm512x->sclk);
+	return ret;
 }
 
 EXPORT_GPL_DEV_PM_OPS(pcm512x_pm_ops) = {

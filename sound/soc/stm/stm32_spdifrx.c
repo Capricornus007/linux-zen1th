@@ -302,8 +302,7 @@ static int stm32_spdifrx_dma_ctrl_start(struct stm32_spdifrx_data *spdifrx)
 	if (!spdifrx->desc)
 		return -EINVAL;
 
-	spdifrx->desc->callback = stm32_spdifrx_dma_complete;
-	spdifrx->desc->callback_param = spdifrx;
+	dmaengine_desc_set_callback(spdifrx->desc, stm32_spdifrx_dma_complete, NULL, spdifrx);
 	cookie = dmaengine_submit(spdifrx->desc);
 	err = dma_submit_error(cookie);
 	if (err)
@@ -402,8 +401,7 @@ static int stm32_spdifrx_dma_ctrl_register(struct device *dev,
 		return dev_err_probe(dev, PTR_ERR(spdifrx->ctrl_chan),
 				     "dma_request_chan error\n");
 
-	spdifrx->dmab = devm_kzalloc(dev, sizeof(struct snd_dma_buffer),
-				     GFP_KERNEL);
+	spdifrx->dmab = devm_kzalloc_obj(dev, struct snd_dma_buffer);
 	if (!spdifrx->dmab)
 		return -ENOMEM;
 
@@ -946,7 +944,7 @@ static int stm32_spdifrx_probe(struct platform_device *pdev)
 	u32 ver, idr;
 	int ret;
 
-	spdifrx = devm_kzalloc(&pdev->dev, sizeof(*spdifrx), GFP_KERNEL);
+	spdifrx = devm_kzalloc_obj(&pdev->dev, *spdifrx);
 	if (!spdifrx)
 		return -ENOMEM;
 

@@ -522,8 +522,7 @@ static int tegra_qspi_start_tx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->tx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->tx_dma_desc->callback_param = &tqspi->tx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->tx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->tx_dma_complete);
 	dmaengine_submit(tqspi->tx_dma_desc);
 	dma_async_issue_pending(tqspi->tx_dma_chan);
 
@@ -550,8 +549,7 @@ static int tegra_qspi_start_rx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->rx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->rx_dma_desc->callback_param = &tqspi->rx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->rx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->rx_dma_complete);
 	dmaengine_submit(tqspi->rx_dma_desc);
 	dma_async_issue_pending(tqspi->rx_dma_chan);
 
@@ -1032,7 +1030,7 @@ static struct tegra_qspi_client_data *tegra_qspi_parse_cdata_dt(struct spi_devic
 	struct tegra_qspi_client_data *cdata;
 	struct tegra_qspi *tqspi = spi_controller_get_devdata(spi->controller);
 
-	cdata = devm_kzalloc(tqspi->dev, sizeof(*cdata), GFP_KERNEL);
+	cdata = devm_kzalloc_obj(tqspi->dev, *cdata);
 	if (!cdata)
 		return NULL;
 

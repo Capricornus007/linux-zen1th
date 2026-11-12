@@ -510,7 +510,7 @@ static void dwapb_configure_irqs(struct dwapb_gpio *gpio,
 	struct gpio_irq_chip *girq;
 	int err;
 
-	pirq = devm_kzalloc(gpio->dev, sizeof(*pirq), GFP_KERNEL);
+	pirq = devm_kzalloc_obj(gpio->dev, *pirq);
 	if (!pirq)
 		return;
 
@@ -573,7 +573,7 @@ static int dwapb_gpio_add_port(struct dwapb_gpio *gpio,
 	port->idx = pp->idx;
 
 #ifdef CONFIG_PM_SLEEP
-	port->ctx = devm_kzalloc(gpio->dev, sizeof(*port->ctx), GFP_KERNEL);
+	port->ctx = devm_kzalloc_obj(gpio->dev, *port->ctx);
 	if (!port->ctx)
 		return -ENOMEM;
 #endif
@@ -650,7 +650,7 @@ static struct dwapb_platform_data *dwapb_gpio_get_pdata(struct device *dev)
 	if (nports == 0)
 		return ERR_PTR(-ENODEV);
 
-	pdata = devm_kzalloc(dev, struct_size(pdata, properties, nports), GFP_KERNEL);
+	pdata = devm_kzalloc_flex(dev, *pdata, properties, nports);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
 
@@ -748,18 +748,18 @@ static int dwapb_get_clks(struct dwapb_gpio *gpio)
 }
 
 static const struct of_device_id dwapb_of_match[] = {
-	{ .compatible = "snps,dw-apb-gpio", .data = (void *)GPIO_REG_OFFSET_V1},
-	{ .compatible = "apm,xgene-gpio-v2", .data = (void *)GPIO_REG_OFFSET_V2},
+	{ .compatible = "snps,dw-apb-gpio", .data = (void *)GPIO_REG_OFFSET_V1 },
+	{ .compatible = "apm,xgene-gpio-v2", .data = (void *)GPIO_REG_OFFSET_V2 },
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, dwapb_of_match);
 
 static const struct acpi_device_id dwapb_acpi_match[] = {
-	{"HISI0181", GPIO_REG_OFFSET_V1},
-	{"APMC0D07", GPIO_REG_OFFSET_V1},
-	{"APMC0D81", GPIO_REG_OFFSET_V2},
-	{"FUJI200A", GPIO_REG_OFFSET_V1},
-	{"LECA0001", GPIO_REG_OFFSET_V1},
+	{ .id = "APMC0D07", .driver_data = GPIO_REG_OFFSET_V1 },
+	{ .id = "APMC0D81", .driver_data = GPIO_REG_OFFSET_V2 },
+	{ .id = "FUJI200A", .driver_data = GPIO_REG_OFFSET_V1 },
+	{ .id = "HISI0181", .driver_data = GPIO_REG_OFFSET_V1 },
+	{ .id = "LECA0001", .driver_data = GPIO_REG_OFFSET_V1 },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, dwapb_acpi_match);
@@ -776,7 +776,7 @@ static int dwapb_gpio_probe(struct platform_device *pdev)
 	if (IS_ERR(pdata))
 		return PTR_ERR(pdata);
 
-	gpio = devm_kzalloc(&pdev->dev, struct_size(gpio, ports, pdata->nports), GFP_KERNEL);
+	gpio = devm_kzalloc_flex(&pdev->dev, *gpio, ports, pdata->nports);
 	if (!gpio)
 		return -ENOMEM;
 

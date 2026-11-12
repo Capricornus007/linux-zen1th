@@ -232,11 +232,16 @@ static void stmfts_report_contact_event(struct stmfts_data *sdata,
 	u8 orientation = event[6];
 	u8 area = event[7];
 
+	if (slot_id >= STMFTS_MAX_FINGERS) {
+		dev_warn(&sdata->client->dev,
+			 "invalid slot ID %u\n", slot_id);
+		return;
+	}
+
 	input_mt_slot(sdata->input, slot_id);
 
 	input_mt_report_slot_state(sdata->input, MT_TOOL_FINGER, true);
-	input_report_abs(sdata->input, ABS_MT_POSITION_X, x);
-	input_report_abs(sdata->input, ABS_MT_POSITION_Y, y);
+	touchscreen_report_pos(sdata->input, &sdata->prop, x, y, true);
 	input_report_abs(sdata->input, ABS_MT_TOUCH_MAJOR, maj);
 	input_report_abs(sdata->input, ABS_MT_TOUCH_MINOR, min);
 	input_report_abs(sdata->input, ABS_MT_PRESSURE, area);
@@ -249,6 +254,12 @@ static void stmfts_report_contact_release(struct stmfts_data *sdata,
 					  const u8 event[])
 {
 	u8 slot_id = (event[0] & STMFTS_MASK_TOUCH_ID) >> 4;
+
+	if (slot_id >= STMFTS_MAX_FINGERS) {
+		dev_warn(&sdata->client->dev,
+			 "invalid slot ID %u\n", slot_id);
+		return;
+	}
 
 	input_mt_slot(sdata->input, slot_id);
 	input_mt_report_slot_inactive(sdata->input);
@@ -281,6 +292,12 @@ static void stmfts5_report_contact_event(struct stmfts_data *sdata,
 	/* Distance is 0 for touching, max for hovering */
 	int distance = 0;
 	unsigned int tool;
+
+	if (touch_id >= STMFTS_MAX_FINGERS) {
+		dev_warn(&sdata->client->dev,
+			 "invalid slot ID %u\n", touch_id);
+		return;
+	}
 
 	switch (touch_type) {
 	case STMFTS_TOUCH_TYPE_STYLUS:
@@ -326,8 +343,7 @@ static void stmfts5_report_contact_event(struct stmfts_data *sdata,
 	input_mt_slot(sdata->input, touch_id);
 	input_mt_report_slot_state(sdata->input, tool, true);
 
-	input_report_abs(sdata->input, ABS_MT_POSITION_X, x);
-	input_report_abs(sdata->input, ABS_MT_POSITION_Y, y);
+	touchscreen_report_pos(sdata->input, &sdata->prop, x, y, true);
 	input_report_abs(sdata->input, ABS_MT_TOUCH_MAJOR, maj);
 	input_report_abs(sdata->input, ABS_MT_TOUCH_MINOR, min);
 	input_report_abs(sdata->input, ABS_MT_PRESSURE, area);
@@ -340,6 +356,12 @@ static void stmfts5_report_contact_release(struct stmfts_data *sdata,
 	/* format: touch ID is in high 4 bits of event[1] */
 	u8 touch_id = (event[1] & STMFTS_MASK_TOUCH_ID) >> 4;
 
+	if (touch_id >= STMFTS_MAX_FINGERS) {
+		dev_warn(&sdata->client->dev,
+			 "invalid slot ID %u\n", touch_id);
+		return;
+	}
+
 	input_mt_slot(sdata->input, touch_id);
 	input_mt_report_slot_inactive(sdata->input);
 }
@@ -351,8 +373,7 @@ static void stmfts_report_hover_event(struct stmfts_data *sdata,
 	u16 y = (event[3] << 4) | (event[4] & STMFTS_MASK_Y_LSB);
 	u8 z = event[5];
 
-	input_report_abs(sdata->input, ABS_X, x);
-	input_report_abs(sdata->input, ABS_Y, y);
+	touchscreen_report_pos(sdata->input, &sdata->prop, x, y, false);
 	input_report_abs(sdata->input, ABS_DISTANCE, z);
 
 	input_sync(sdata->input);
@@ -391,15 +412,17 @@ static void stmfts_parse_events(struct stmfts_data *sdata)
 		u8 *event = &sdata->data[i * STMFTS_EVENT_SIZE];
 
 		switch (event[0]) {
+		case STMFTS_EV_NO_EVENT:
+			return;
+
 		case STMFTS_EV_CONTROLLER_READY:
 		case STMFTS_EV_SLEEP_OUT_CONTROLLER_READY:
 		case STMFTS_EV_STATUS:
 			complete(&sdata->cmd_done);
 			fallthrough;
 
-		case STMFTS_EV_NO_EVENT:
 		case STMFTS_EV_DEBUG:
-			return;
+			continue;
 		}
 
 		switch (event[0] & STMFTS_MASK_EVENT_ID) {
@@ -442,19 +465,19 @@ static void stmfts5_parse_events(struct stmfts_data *sdata)
 		u8 *event = &sdata->data[i * STMFTS_EVENT_SIZE];
 
 		switch (event[0]) {
-		case STMFTS5_EV_CONTROLLER_READY:
-			complete(&sdata->cmd_done);
-			fallthrough;
-
 		case STMFTS_EV_NO_EVENT:
 			goto sync;
+
+		case STMFTS5_EV_CONTROLLER_READY:
+			complete(&sdata->cmd_done);
+			continue;
 		}
 
 		switch (event[0] & STMFTS5_MASK_EVENT_ID) {
 		case STMFTS5_EV_STATUS_UPDATE:
 		case STMFTS5_EV_USER_REPORT:
 		case STMFTS5_EV_DEBUG:
-			goto sync;
+			continue;
 
 		case STMFTS5_EV_MULTI_TOUCH_ENTER:
 		case STMFTS5_EV_MULTI_TOUCH_MOTION:
@@ -962,7 +985,7 @@ static int stmfts_probe(struct i2c_client *client)
 						I2C_FUNC_SMBUS_I2C_BLOCK))
 		return -ENODEV;
 
-	sdata = devm_kzalloc(dev, sizeof(*sdata), GFP_KERNEL);
+	sdata = devm_kzalloc_obj(dev, *sdata);
 	if (!sdata)
 		return -ENOMEM;
 

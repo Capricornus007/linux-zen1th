@@ -659,6 +659,7 @@ bool damos_filter_for_ops(enum damos_filter_type type)
 	case DAMOS_FILTER_TYPE_ADDR:
 	case DAMOS_FILTER_TYPE_TARGET:
 	case DAMOS_FILTER_TYPE_PROBE_HITS_WSUM:
+	case DAMOS_FILTER_TYPE_AGE_MS:
 		return false;
 	default:
 		break;
@@ -1336,6 +1337,7 @@ static int damos_commit_filter_arg(
 		dst->sz_range = src->sz_range;
 		break;
 	case DAMOS_FILTER_TYPE_PROBE_HITS_WSUM:
+	case DAMOS_FILTER_TYPE_AGE_MS:
 		if (src->range_max < src->range_min)
 			return -EINVAL;
 		dst->range_min = src->range_min;
@@ -1511,15 +1513,14 @@ static int damos_commit_dests(struct damos_migrate_dests *dst,
 		kfree(dst->node_id_arr);
 		kfree(dst->weight_arr);
 
-		dst->node_id_arr = kmalloc_array(src->nr_dests,
-			sizeof(*dst->node_id_arr), GFP_KERNEL);
+		dst->node_id_arr = kmalloc_objs(*dst->node_id_arr,
+						src->nr_dests);
 		if (!dst->node_id_arr) {
 			dst->weight_arr = NULL;
 			return -ENOMEM;
 		}
 
-		dst->weight_arr = kmalloc_array(src->nr_dests,
-			sizeof(*dst->weight_arr), GFP_KERNEL);
+		dst->weight_arr = kmalloc_objs(*dst->weight_arr, src->nr_dests);
 		if (!dst->weight_arr) {
 			/* ->node_id_arr will be freed by scheme destruction */
 			return -ENOMEM;
@@ -2552,7 +2553,7 @@ static bool damos_filter_match(struct damon_ctx *ctx, struct damon_target *t,
 	bool matched = false;
 	struct damon_target *ti;
 	int target_idx = 0;
-	unsigned long start, end, wsum;
+	unsigned long start, end, wsum, age_ms;
 
 	*err = 0;
 	switch (filter->type) {
@@ -2593,6 +2594,12 @@ static bool damos_filter_match(struct damon_ctx *ctx, struct damon_target *t,
 		wsum = damon_probe_hits_wsum(r, false, true, ctx);
 		matched = filter->range_min <= wsum &&
 			wsum <= filter->range_max;
+		break;
+	case DAMOS_FILTER_TYPE_AGE_MS:
+		age_ms = div_u64((u64)r->age * ctx->attrs.aggr_interval,
+				USEC_PER_MSEC);
+		matched = filter->range_min <= age_ms &&
+			age_ms <= filter->range_max;
 		break;
 	default:
 		return false;
@@ -4045,8 +4052,8 @@ static int kdamond_fn(void *data)
 
 	if (ctx->ops.init)
 		ctx->ops.init(ctx);
-	ctx->regions_score_histogram = kmalloc_array(DAMOS_MAX_SCORE + 1,
-			sizeof(*ctx->regions_score_histogram), GFP_KERNEL);
+	ctx->regions_score_histogram = kmalloc_objs(*ctx->regions_score_histogram,
+						    DAMOS_MAX_SCORE + 1);
 	if (!ctx->regions_score_histogram)
 		goto done;
 

@@ -109,6 +109,7 @@ Hardware Monitoring Kernel Drivers
    ina3221
    inspur-ipsps1
    intel-m10-bmc-hwmon
+   ionic-hwmon
    ir35221
    ir38064
    ir36021
@@ -213,6 +214,7 @@ Hardware Monitoring Kernel Drivers
    mpq82d00
    mpq8646
    mpq8785
+   msi_mystic_light
    nct6683
    nct6775
    nct7363

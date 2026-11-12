@@ -3170,7 +3170,7 @@ void pnfs_deviceid_delete_mark(struct nfs_client *clp,
 {
 	struct nfs4_deviceid_delete *dd, *new;
 
-	new = kzalloc_obj(*new, GFP_KERNEL);
+	new = kzalloc_obj(*new);
 	if (!new)
 		return;	/* lost notification; recovery waits for the next */
 	new->ld = pnfs_find_layoutdriver(ld->id);

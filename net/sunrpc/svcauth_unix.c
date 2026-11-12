@@ -633,7 +633,7 @@ int sunrpc_nl_unix_gid_get_reqs_dumpit(struct sk_buff *skb,
 		return 0;
 
 	items = kzalloc_objs(*items, cnt);
-	seqnos = kcalloc(cnt, sizeof(*seqnos), GFP_KERNEL);
+	seqnos = kzalloc_objs(*seqnos, cnt);
 	if (!items || !seqnos) {
 		ret = -ENOMEM;
 		goto out_alloc;
@@ -1342,7 +1342,7 @@ int sunrpc_nl_ip_map_get_reqs_dumpit(struct sk_buff *skb,
 		return 0;
 
 	items = kzalloc_objs(*items, cnt);
-	seqnos = kcalloc(cnt, sizeof(*seqnos), GFP_KERNEL);
+	seqnos = kzalloc_objs(*seqnos, cnt);
 	if (!items || !seqnos) {
 		ret = -ENOMEM;
 		goto out_alloc;

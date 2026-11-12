@@ -231,7 +231,7 @@ int imx_scu_enable_general_irq_channel(struct device *dev)
 	 */
 	smp_store_release(&imx_sc_irq_ipc_handle, ipc);
 
-	cl = devm_kzalloc(dev, sizeof(*cl), GFP_KERNEL);
+	cl = devm_kzalloc_obj(dev, *cl);
 	if (!cl)
 		return -ENOMEM;
 

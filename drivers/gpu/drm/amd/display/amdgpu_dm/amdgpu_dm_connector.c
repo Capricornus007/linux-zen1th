@@ -255,6 +255,8 @@ STATIC_IFN_KUNIT void update_subconnector_property(struct amdgpu_dm_connector *a
 EXPORT_IF_KUNIT(update_subconnector_property);
 
 STATIC_IFN_KUNIT int amdgpu_dm_connector_get_modes(struct drm_connector *connector);
+STATIC_IFN_KUNIT struct drm_encoder *amdgpu_dm_connector_to_encoder(
+	struct drm_connector *connector);
 
 STATIC_IFN_KUNIT void amdgpu_dm_fbc_init(struct drm_connector *connector)
 {
@@ -1405,6 +1407,11 @@ STATIC_IFN_KUNIT bool is_duplicate_mode(struct amdgpu_dm_connector *aconnector,
 			return true;
 	}
 
+	list_for_each_entry(m, &aconnector->base.modes, head) {
+		if (drm_mode_equal(m, mode))
+			return true;
+	}
+
 	return false;
 }
 
@@ -1543,6 +1550,51 @@ create_stream_for_sink(struct drm_connector *connector,
 			break;
 		}
 	}
+
+	/*
+	 * After a probe with size limits smaller than the preferred mode,
+	 * connector->modes no longer has that mode, and the first mode left
+	 * would become the stream timing. fbdev emulation probes with limits
+	 * that video= can set below the native size. Only eDP and LVDS panels
+	 * get a fallback here, since they take only their native size. On other
+	 * connectors mode_valid can also reject the preferred mode, and then
+	 * the first valid mode is the right one
+	 *
+	 * Take a mode of the native size from connector->modes if one is left,
+	 * since mode_valid may have rejected the preferred timing itself. The
+	 * probe sorts the list, so the first one has the highest refresh rate
+	 * left. If the limits pruned them all, use the copy of the preferred
+	 * mode that amdgpu_dm_get_native_mode() keeps in the encoder. It is
+	 * made on every probe, before the limits apply
+	 */
+	if (!preferred_mode && aconnector && aconnector->drm_edid &&
+	    (connector->connector_type == DRM_MODE_CONNECTOR_eDP ||
+	     connector->connector_type == DRM_MODE_CONNECTOR_LVDS)) {
+		struct drm_encoder *encoder = amdgpu_dm_connector_to_encoder(connector);
+		const struct drm_display_mode *enc_native =
+			encoder ? &to_amdgpu_encoder(encoder)->native_mode : NULL;
+
+		if (enc_native && enc_native->clock) {
+			list_for_each_entry(connector_mode, &connector->modes, head) {
+				if (connector_mode->hdisplay == enc_native->hdisplay &&
+				    connector_mode->vdisplay == enc_native->vdisplay) {
+					preferred_mode = connector_mode;
+					break;
+				}
+			}
+
+			/*
+			 * saved_mode is only used for FreeSync video modes, and
+			 * that path doesn't read preferred_mode
+			 */
+			if (!preferred_mode) {
+				drm_mode_init(&saved_mode, enc_native);
+				drm_mode_set_crtcinfo(&saved_mode, CRTC_INTERLACE_HALVE_V);
+				preferred_mode = &saved_mode;
+			}
+		}
+	}
+
 	if (!preferred_mode)
 		preferred_mode = list_first_entry_or_null(
 				&connector->modes,
@@ -1987,22 +2039,16 @@ STATIC_IFN_KUNIT void amdgpu_dm_connector_destroy(struct drm_connector *connecto
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_destroy);
 
-void amdgpu_dm_connector_funcs_reset(struct drm_connector *connector)
+struct drm_connector_state *
+amdgpu_dm_connector_atomic_create_state(struct drm_connector *connector)
 {
-	struct dm_connector_state *old_state =
-		to_dm_connector_state(connector->state);
 	struct dm_connector_state *state;
 
 	state = kzalloc_obj(*state);
 	if (!state)
-		return;
+		return ERR_PTR(-ENOMEM);
 
-	if (connector->state)
-		__drm_atomic_helper_connector_destroy_state(connector->state);
-
-	kfree(old_state);
-
-	__drm_atomic_helper_connector_reset(connector, &state->base);
+	__drm_atomic_helper_connector_state_init(&state->base, connector);
 
 	state->scaling = RMX_OFF;
 	state->underscan_enable = false;
@@ -2018,8 +2064,10 @@ void amdgpu_dm_connector_funcs_reset(struct drm_connector *connector)
 		else
 			state->abm_level = amdgpu_dm_abm_level;
 	}
+
+	return &state->base;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_connector_funcs_reset);
+EXPORT_IF_KUNIT(amdgpu_dm_connector_atomic_create_state);
 
 struct drm_connector_state *
 amdgpu_dm_connector_atomic_duplicate_state(struct drm_connector *connector)
@@ -2118,10 +2166,10 @@ STATIC_IFN_KUNIT void amdgpu_dm_connector_funcs_force(struct drm_connector *conn
 EXPORT_IF_KUNIT(amdgpu_dm_connector_funcs_force);
 
 static const struct drm_connector_funcs amdgpu_dm_connector_funcs = {
-	.reset = amdgpu_dm_connector_funcs_reset,
 	.detect = amdgpu_dm_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = amdgpu_dm_connector_destroy,
+	.atomic_create_state = amdgpu_dm_connector_atomic_create_state,
 	.atomic_duplicate_state = amdgpu_dm_connector_atomic_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 	.atomic_set_property = amdgpu_dm_connector_atomic_set_property,
@@ -3241,8 +3289,16 @@ void amdgpu_dm_connector_init_helper(struct amdgpu_display_manager *dm,
 	 * Some of the properties below require access to state, like bpc.
 	 * Allocate some default initial connector state with our reset helper.
 	 */
-	if (aconnector->base.funcs->reset)
-		aconnector->base.funcs->reset(&aconnector->base);
+	if (!aconnector->base.state &&
+	    aconnector->base.funcs->atomic_create_state) {
+		struct drm_connector_state *conn_state;
+
+		conn_state = aconnector->base.funcs->atomic_create_state(&aconnector->base);
+		if (IS_ERR(conn_state))
+			return;
+
+		aconnector->base.state = conn_state;
+	}
 
 	aconnector->connector_id = link_index;
 	aconnector->bl_idx = -1;
@@ -3255,6 +3311,7 @@ void amdgpu_dm_connector_init_helper(struct amdgpu_display_manager *dm,
 	aconnector->audio_inst = -1;
 	aconnector->pack_sdp_v1_3 = false;
 	aconnector->as_type = ADAPTIVE_SYNC_TYPE_NONE;
+	aconnector->vrr_override = AMDGPU_DM_VRR_OVERRIDE_AUTO;
 	memset(&aconnector->vsdb_info, 0, sizeof(aconnector->vsdb_info));
 	mutex_init(&aconnector->hpd_lock);
 	mutex_init(&aconnector->handle_mst_msg_ready);
@@ -3717,6 +3774,58 @@ STATIC_IFN_KUNIT int get_amd_vsdb(struct amdgpu_dm_connector *aconnector,
 }
 EXPORT_IF_KUNIT(get_amd_vsdb);
 
+static bool amdgpu_dm_apply_hdmi_vrr_override(struct drm_connector *connector,
+					      struct dc_sink *sink,
+					      bool *force_hdmi_vrr)
+{
+	struct amdgpu_dm_connector *aconnector =
+		to_amdgpu_dm_connector(connector);
+	struct amdgpu_device *adev = drm_to_adev(connector->dev);
+
+	if (aconnector->vrr_override ==
+			AMDGPU_DM_VRR_OVERRIDE_DISABLE_VRR) {
+		drm_dbg_driver(adev_to_drm(adev),
+			       "VRR: FreeSync/VRR disabled by debugfs override on %s\n",
+			       connector->name);
+		aconnector->min_vfreq = 0;
+		aconnector->max_vfreq = 0;
+		connector->display_info.monitor_range.min_vfreq = 0;
+		connector->display_info.monitor_range.max_vfreq = 0;
+		connector->display_info.hdmi.vrr_cap.supported = false;
+		connector->display_info.hdmi.vrr_cap.vrr_min = 0;
+		connector->display_info.hdmi.vrr_cap.vrr_max = 0;
+		aconnector->as_type = ADAPTIVE_SYNC_TYPE_NONE;
+		aconnector->pack_sdp_v1_3 = false;
+		memset(&aconnector->vsdb_info, 0,
+		       sizeof(aconnector->vsdb_info));
+		sink->edid_caps.freesync_vcp_code = 0;
+
+		return true;
+	}
+
+	*force_hdmi_vrr = aconnector->vrr_override ==
+		AMDGPU_DM_VRR_OVERRIDE_FORCE_HDMI_VRR;
+	if (*force_hdmi_vrr && connector->display_info.hdmi.vrr_cap.supported) {
+		drm_dbg_driver(adev_to_drm(adev),
+			       "VRR: HDMI_VRR forced by debugfs override on %s\n",
+			       connector->name);
+		aconnector->min_vfreq = 0;
+		aconnector->max_vfreq = 0;
+		aconnector->as_type = ADAPTIVE_SYNC_TYPE_NONE;
+		aconnector->pack_sdp_v1_3 = false;
+		memset(&aconnector->vsdb_info, 0,
+		       sizeof(aconnector->vsdb_info));
+		sink->edid_caps.freesync_vcp_code = 0;
+	} else if (*force_hdmi_vrr) {
+		drm_dbg_driver(adev_to_drm(adev),
+			       "VRR: HDMI_VRR force override ignored on %s (unsupported)\n",
+			       connector->name);
+		*force_hdmi_vrr = false;
+	}
+
+	return false;
+}
+
 /**
  * amdgpu_dm_update_freesync_caps - Update Freesync capabilities
  *
@@ -3743,6 +3852,7 @@ void amdgpu_dm_update_freesync_caps(struct drm_connector *connector,
 	struct amdgpu_device *adev = drm_to_adev(connector->dev);
 	struct amdgpu_hdmi_vsdb_info vsdb_info = {0};
 	const struct edid *edid;
+	bool force_hdmi_vrr = false;
 	bool freesync_capable = false;
 	enum adaptive_sync_type as_type = ADAPTIVE_SYNC_TYPE_NONE;
 
@@ -3821,17 +3931,21 @@ void amdgpu_dm_update_freesync_caps(struct drm_connector *connector,
 		}
 	} else if (has_vsdb && (sink->sink_signal == SIGNAL_TYPE_HDMI_TYPE_A ||
 				sink->sink_signal == SIGNAL_TYPE_HDMI_FRL)) {
-		amdgpu_dm_connector->vsdb_info = vsdb_info;
-		sink->edid_caps.freesync_vcp_code = vsdb_info.freesync_mccs_vcp_code;
+		if (amdgpu_dm_apply_hdmi_vrr_override(connector, sink, &force_hdmi_vrr))
+			goto update;
+		if (!force_hdmi_vrr) {
+			amdgpu_dm_connector->vsdb_info = vsdb_info;
+			sink->edid_caps.freesync_vcp_code = vsdb_info.freesync_mccs_vcp_code;
 
-		if (vsdb_info.freesync_supported) {
-			amdgpu_dm_connector->min_vfreq = vsdb_info.min_refresh_rate_hz;
-			amdgpu_dm_connector->max_vfreq = vsdb_info.max_refresh_rate_hz;
-			if (amdgpu_dm_connector->max_vfreq - amdgpu_dm_connector->min_vfreq > 10)
-				freesync_capable = true;
+			if (vsdb_info.freesync_supported) {
+				amdgpu_dm_connector->min_vfreq = vsdb_info.min_refresh_rate_hz;
+				amdgpu_dm_connector->max_vfreq = vsdb_info.max_refresh_rate_hz;
+				if (amdgpu_dm_connector->max_vfreq - amdgpu_dm_connector->min_vfreq > 10)
+					freesync_capable = true;
 
-			connector->display_info.monitor_range.min_vfreq = vsdb_info.min_refresh_rate_hz;
-			connector->display_info.monitor_range.max_vfreq = vsdb_info.max_refresh_rate_hz;
+				connector->display_info.monitor_range.min_vfreq = vsdb_info.min_refresh_rate_hz;
+				connector->display_info.monitor_range.max_vfreq = vsdb_info.max_refresh_rate_hz;
+			}
 		}
 	}
 
@@ -3931,7 +4045,7 @@ update:
 		dm_con_state->freesync_capable = freesync_capable;
 
 	drm_dbg_driver(adev_to_drm(adev),
-		       "VRR: caps result: freesync_capable=%d min_vfreq=%d max_vfreq=%d\n",
+		       "VRR: caps result: vrr_capable=%d min_vfreq=%d max_vfreq=%d\n",
 		       freesync_capable, amdgpu_dm_connector->min_vfreq,
 		       amdgpu_dm_connector->max_vfreq);
 

@@ -203,7 +203,6 @@ c_id_attributes = [
     "__noreturn",
     "__packed",
     "__pure",
-    "__require_explicit_initialization",
     "__section",
     "__always_unused",
     "__maybe_unused",

@@ -151,11 +151,11 @@ static const struct palmas_device_data tps80036_dev_data = {
 };
 
 static const struct of_device_id of_palmas_gpio_match[] = {
-	{ .compatible = "ti,palmas-gpio", .data = &palmas_dev_data,},
-	{ .compatible = "ti,tps65913-gpio", .data = &palmas_dev_data,},
-	{ .compatible = "ti,tps65914-gpio", .data = &palmas_dev_data,},
-	{ .compatible = "ti,tps80036-gpio", .data = &tps80036_dev_data,},
-	{ },
+	{ .compatible = "ti,palmas-gpio", .data = &palmas_dev_data },
+	{ .compatible = "ti,tps65913-gpio", .data = &palmas_dev_data },
+	{ .compatible = "ti,tps65914-gpio", .data = &palmas_dev_data },
+	{ .compatible = "ti,tps80036-gpio", .data = &tps80036_dev_data },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, of_palmas_gpio_match);
 
@@ -171,8 +171,7 @@ static int palmas_gpio_probe(struct platform_device *pdev)
 	if (!dev_data)
 		dev_data = &palmas_dev_data;
 
-	palmas_gpio = devm_kzalloc(&pdev->dev,
-				sizeof(*palmas_gpio), GFP_KERNEL);
+	palmas_gpio = devm_kzalloc_obj(&pdev->dev, *palmas_gpio);
 	if (!palmas_gpio)
 		return -ENOMEM;
 

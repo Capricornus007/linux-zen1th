@@ -876,21 +876,17 @@ int gpu_buddy_init(struct gpu_buddy *mm, u64 size, u64 chunk_size)
 
 	BUG_ON(mm->max_order > GPU_BUDDY_MAX_ORDER);
 
-	mm->free_scoreboard = kcalloc(mm->max_order + 1,
-				      sizeof(*mm->free_scoreboard),
-				      GFP_KERNEL);
+	mm->free_scoreboard = kzalloc_objs(*mm->free_scoreboard,
+					   mm->max_order + 1);
 	if (!mm->free_scoreboard)
 		return -ENOMEM;
 
-	mm->used_scoreboard = kcalloc(mm->max_order + 1,
-				      sizeof(*mm->used_scoreboard),
-				      GFP_KERNEL);
+	mm->used_scoreboard = kzalloc_objs(*mm->used_scoreboard,
+					   mm->max_order + 1);
 	if (!mm->used_scoreboard)
 		goto out_free_free_scoreboard;
 
-	mm->free_tree = kcalloc(mm->max_order + 1,
-				sizeof(struct rb_root),
-				GFP_KERNEL);
+	mm->free_tree = kzalloc_objs(struct rb_root, mm->max_order + 1);
 	if (!mm->free_tree)
 		goto out_free_used_scoreboard;
 
@@ -2022,10 +2018,16 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 
 	if (order > mm->max_order || size > mm->size) {
 		if ((flags & GPU_BUDDY_CONTIGUOUS_ALLOCATION) &&
-		    !(flags & GPU_BUDDY_RANGE_ALLOCATION))
-			return __alloc_contig_try_harder(mm, original_size,
-							 original_min_size,
-							 flags, blocks);
+		    !(flags & GPU_BUDDY_RANGE_ALLOCATION)) {
+			err = __alloc_contig_try_harder(mm, original_size,
+							original_min_size,
+							flags, &allocated);
+			if (err)
+				return err;
+
+			list_splice_tail(&allocated, blocks);
+			return 0;
+		}
 
 		return -EINVAL;
 	}
@@ -2064,9 +2066,11 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 								original_size,
 								original_min_size,
 								flags,
-								blocks);
-				if (!err)
+								&allocated);
+				if (!err) {
+					list_splice_tail(&allocated, blocks);
 					return 0;
+				}
 				if (err != -ENOSPC)
 					return err;
 				goto err_free;
