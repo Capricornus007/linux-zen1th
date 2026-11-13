@@ -267,7 +267,18 @@ static struct platform_driver max8925_regulator_driver = {
 	},
 	.probe		= max8925_regulator_probe,
 };
-subsys_platform_driver(max8925_regulator_driver);
+
+static int __init max8925_regulator_init(void)
+{
+	return platform_driver_register(&max8925_regulator_driver);
+}
+subsys_initcall(max8925_regulator_init);
+
+static void __exit max8925_regulator_exit(void)
+{
+	platform_driver_unregister(&max8925_regulator_driver);
+}
+module_exit(max8925_regulator_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");

@@ -820,9 +820,6 @@ static int cs43130_dsd_hw_params(struct snd_pcm_substream *substream,
 	u8 dsd_speed;
 
 	scoped_guard(mutex, &cs43130->clk_mutex) {
-		if (test_and_set_bit(dai->id, &cs43130->clk_dais))
-			goto clk_held;
-
 		if (!cs43130->clk_req) {
 			/* no DAI is currently using clk */
 			if (!(CS43130_MCLK_22M % params_rate(params)))
@@ -841,7 +838,6 @@ static int cs43130_dsd_hw_params(struct snd_pcm_substream *substream,
 		if (cs43130->clk_req == 2)
 			cs43130_pcm_dsd_mix(true, cs43130->regmap);
 	}
-clk_held:
 
 	switch (params_rate(params)) {
 	case 176400:
@@ -887,9 +883,6 @@ static int cs43130_hw_params(struct snd_pcm_substream *substream,
 	u8 dsd_speed;
 
 	scoped_guard(mutex, &cs43130->clk_mutex) {
-		if (test_and_set_bit(dai->id, &cs43130->clk_dais))
-			goto clk_held;
-
 		if (!cs43130->clk_req) {
 			/* no DAI is currently using clk */
 			if (!(CS43130_MCLK_22M % params_rate(params)))
@@ -908,7 +901,6 @@ static int cs43130_hw_params(struct snd_pcm_substream *substream,
 		if (cs43130->clk_req == 2)
 			cs43130_pcm_dsd_mix(true, cs43130->regmap);
 	}
-clk_held:
 
 	switch (dai->id) {
 	case CS43130_ASP_DOP_DAI:
@@ -998,13 +990,6 @@ static int cs43130_hw_free(struct snd_pcm_substream *substream,
 	struct cs43130_private *cs43130 = snd_soc_component_get_drvdata(component);
 
 	guard(mutex)(&cs43130->clk_mutex);
-	/*
-	 * ALSA calls hw_free() after a failed hw_params(), also when this DAI's
-	 * hw_params() never ran: drop only a reference it took.
-	 */
-	if (!test_and_clear_bit(dai->id, &cs43130->clk_dais))
-		return 0;
-
 	cs43130->clk_req--;
 	if (!cs43130->clk_req) {
 		/* no DAI is currently using clk */
@@ -2428,7 +2413,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs43130_digital =
 	.set_sysclk		= cs43130_component_set_sysclk,
 	.set_pll		= cs43130_set_pll,
 	.idle_bias_on		= 1,
-	.use_pmdown_time	= 1,
 	.endianness		= 1,
 	/* Don't take into account the ending analog widgets and routes */
 	.dapm_widgets		= hp_widgets,
@@ -2444,7 +2428,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs43130_analog = 
 	.set_sysclk		= cs43130_component_set_sysclk,
 	.set_pll		= cs43130_set_pll,
 	.idle_bias_on		= 1,
-	.use_pmdown_time	= 1,
 	.endianness		= 1,
 	.dapm_widgets		= hp_widgets,
 	.num_dapm_widgets	= ARRAY_SIZE(hp_widgets),

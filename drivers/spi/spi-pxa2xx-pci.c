@@ -81,7 +81,7 @@ static bool lpss_dma_filter(struct dma_chan *chan, void *param)
 {
 	struct dw_dma_slave *dws = param;
 
-	if (dws->dma_dev != dmaengine_get_provider_device(chan))
+	if (dws->dma_dev != chan->device->dev)
 		return false;
 
 	chan->private = dws;

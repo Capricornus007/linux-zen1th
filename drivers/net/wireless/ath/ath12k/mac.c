@@ -1241,8 +1241,6 @@ void ath12k_mac_peer_cleanup_all(struct ath12k *ar)
 		if (dp_peer) {
 			peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 			rcu_assign_pointer(dp_peer->link_peers[peer->link_id], NULL);
-			WRITE_ONCE(dp_peer->link_peers_map,
-				   READ_ONCE(dp_peer->link_peers_map) & ~BIT(peer->link_id));
 			rcu_assign_pointer(dp_hw->dp_peers[peerid_index], NULL);
 		}
 		spin_unlock_bh(&dp_hw->peer_lock);
@@ -3875,6 +3873,7 @@ static int ath12k_mac_peer_assoc(struct ath12k *ar,
 	int ret;
 
 	reinit_completion(&ar->peer_assoc_done);
+	reinit_completion(&ar->peer_ext_event_done);
 	reinit_completion(&ah->peer_ml_id_done);
 
 	ret = ath12k_wmi_send_peer_assoc_cmd(ar, peer_arg);
@@ -3888,6 +3887,55 @@ static int ath12k_mac_peer_assoc(struct ath12k *ar,
 		ath12k_warn(ar->ab, "failed to get peer assoc conf event for %pM vdev %i\n",
 			    peer_arg->peer_mac, peer_arg->vdev_id);
 		return -ETIMEDOUT;
+	}
+
+	if (!ar->ab->hw_params->support_hw_link_id &&
+	    peer_arg->ml.enabled &&
+	    peer_arg->is_assoc) {
+		const u8 *addr = peer_arg->peer_mac;
+		u32 vdev_id = peer_arg->vdev_id;
+
+		if (test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
+			     ar->ab->wmi_ab.svc_map)) {
+			/*
+			 * The firmware reports the logical link id of this peer
+			 * in the PEER_EXTENDED event, which fills link_id_map.
+			 * Wait for it before returning.
+			 */
+			if (!wait_for_completion_timeout(&ar->peer_ext_event_done,
+							 1 * HZ)) {
+				ath12k_warn(ar->ab,
+					    "failed to get peer extended event for %pM vdev %u\n",
+					    addr, vdev_id);
+				return -ETIMEDOUT;
+			}
+		} else {
+			/*
+			 * The firmware does not report the logical link id, so
+			 * allocate it on the host by mirroring the firmware
+			 * scheme: assign the lowest free slot.
+			 */
+			struct ath12k_dp *dp = ath12k_ab_to_dp(ar->ab);
+			struct ath12k_dp_link_peer *peer;
+
+			guard(spinlock_bh)(&dp->dp_lock);
+
+			peer = ath12k_dp_link_peer_find_by_vdev_and_addr(dp, vdev_id,
+									 addr);
+			if (!peer) {
+				ath12k_warn(ar->ab, "failed to find dp_link_peer with mac %pM vdev %u\n",
+					    addr, vdev_id);
+				return -ENOENT;
+			}
+
+			ret = ath12k_dp_peer_alloc_logical_link_id(dp, peer);
+			if (ret) {
+				ath12k_warn(ar->ab,
+					    "failed to allocate logical link id for %pM: %d\n",
+					    addr, ret);
+				return ret;
+			}
+		}
 	}
 
 	/*
@@ -4888,28 +4936,35 @@ skip_vdev_up:
 		}
 		ath12k_control_beaconing(arvif, info);
 
-		if (arvif->is_up && info->he_support &&
-		    info->he_oper.params) {
-			/* TODO: Extend to support 1024 BA Bitmap size */
-			ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
-							    WMI_VDEV_PARAM_BA_MODE,
-							    WMI_BA_MODE_BUFFER_SIZE_256);
-			if (ret)
-				ath12k_warn(ar->ab,
-					    "failed to set BA BUFFER SIZE 256 for vdev: %d\n",
-					    arvif->vdev_id);
+		if (arvif->is_up && info->he_support) {
+			param_id = WMI_VDEV_PARAM_BA_MODE;
+			param_value = info->eht_support ?
+				      WMI_BA_MODE_BUFFER_SIZE_1024 :
+				      WMI_BA_MODE_BUFFER_SIZE_256;
 
-			param_id = WMI_VDEV_PARAM_HEOPS_0_31;
-			param_value = info->he_oper.params;
 			ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
 							    param_id, param_value);
-			ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
-				   "he oper param: %x set for VDEV: %d\n",
-				   param_value, arvif->vdev_id);
-
 			if (ret)
-				ath12k_warn(ar->ab, "Failed to set he oper params %x for VDEV %d: %i\n",
-					    param_value, arvif->vdev_id, ret);
+				ath12k_warn(ar->ab,
+					    "failed to set BA BUFFER SIZE %u for vdev %d: %d\n",
+					    info->eht_support ? 1024 : 256,
+					    arvif->vdev_id, ret);
+
+			if (info->he_oper.params) {
+				param_id = WMI_VDEV_PARAM_HEOPS_0_31;
+				param_value = info->he_oper.params;
+
+				ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
+								    param_id,
+								    param_value);
+				ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
+					   "he oper param: %x set for VDEV: %d\n",
+					   param_value, arvif->vdev_id);
+
+				if (ret)
+					ath12k_warn(ar->ab, "Failed to set he oper params %x for VDEV %d: %i\n",
+						    param_value, arvif->vdev_id, ret);
+			}
 		}
 	}
 
@@ -15222,6 +15277,7 @@ static void ath12k_mac_setup(struct ath12k *ar)
 	init_completion(&ar->vdev_setup_done);
 	init_completion(&ar->vdev_delete_done);
 	init_completion(&ar->peer_assoc_done);
+	init_completion(&ar->peer_ext_event_done);
 	init_completion(&ar->install_key_done);
 	init_completion(&ar->bss_survey_done);
 	init_completion(&ar->scan.started);

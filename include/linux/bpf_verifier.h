@@ -57,13 +57,46 @@ struct bpf_stack_range {
 	u32 size;
 };
 
+/*
+ * What is known about a 64-bit value: the reduced product of known bits, a range, a range of the
+ * low 32 bits and a congruence. The value is in each of the four. reg_bounds_sync() is the
+ * reduction: what one of them knows refines the others.
+ */
+struct scalar {
+	struct tnum var_off;
+	struct cnum64 r64; /* 64-bit range as circular number */
+	struct cnum32 r32; /* 32-bit range as circular number */
+	/*
+	 * The value, interpreted as s64, lies on a line described by a linear
+	 * equation base + step * k.
+	 * Invariant: base < step.
+	 */
+	u16 base;
+	u16 step;
+};
+
+/* The struct scalar that is an anonymous member of *@p */
+#define scalar_of(p) container_of_const(&(p)->var_off, struct scalar, var_off)
+
 struct bpf_reg_state {
-	/* Ordering of fields matters.  See regsafe() */
 	enum bpf_reg_type type;
 	/*
-	 * Constant delta between "linked" scalars with the same ID.
+	 * For PTR_TO_PACKET, used to find other pointers with the same variable
+	 * offset, so they can share range knowledge.
+	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
+	 * came from, when one is tested for != NULL.
+	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
+	 * for the purpose of tracking that it's freed.
+	 * For PTR_TO_SOCKET this is used to share which pointers retain the
+	 * same reference to the socket, to determine proper reference freeing.
+	 * For stack slots that are dynptrs, this is used to track references to
+	 * the dynptr to determine proper reference freeing.
+	 * Similarly to dynptrs, we use ID to track "belonging" of a reference
+	 * to a specific instance of bpf_iter.
+	 * A scalar has no id. The scalars that it is linked to are static: computed before the
+	 * main pass, see bpf_scev_next_linked_reg().
 	 */
-	s32 delta;
+	u32 id;
 	union {
 		/* valid when type == PTR_TO_PACKET */
 		int range;
@@ -136,8 +169,8 @@ struct bpf_reg_state {
 
 		/* Max size from any of the above. */
 		struct {
-			unsigned long raw1;
-			unsigned long raw2;
+			u64 raw1;
+			u64 raw2;
 		} raw;
 
 		struct { /* for PTR_TO_FUNC */
@@ -146,52 +179,6 @@ struct bpf_reg_state {
 			u32 func_set;
 		};
 	};
-	/* For scalar types (SCALAR_VALUE), this represents our knowledge of
-	 * the actual value.
-	 * For pointer types, this represents the variable part of the offset
-	 * from the pointed-to object, and is shared with all bpf_reg_states
-	 * with the same id as us.
-	 */
-	struct tnum var_off;
-	/* Used to determine if any memory access using this register will
-	 * result in a bad access.
-	 * These refer to the same value as var_off, not necessarily the actual
-	 * contents of the register.
-	 */
-	struct cnum64 r64; /* 64-bit range as circular number */
-	struct cnum32 r32; /* 32-bit range as circular number */
-	/*
-	 * The value described by this register, interpreted as s64, lies on
-	 * a line described by a linear equation base + step * k.
-	 * Invariant: base < step.
-	 */
-	u16 base;
-	u16 step;
-	/* For PTR_TO_PACKET, used to find other pointers with the same variable
-	 * offset, so they can share range knowledge.
-	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
-	 * came from, when one is tested for != NULL.
-	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
-	 * for the purpose of tracking that it's freed.
-	 * For PTR_TO_SOCKET this is used to share which pointers retain the
-	 * same reference to the socket, to determine proper reference freeing.
-	 * For stack slots that are dynptrs, this is used to track references to
-	 * the dynptr to determine proper reference freeing.
-	 * Similarly to dynptrs, we use ID to track "belonging" of a reference
-	 * to a specific instance of bpf_iter.
-	 */
-	/*
-	 * Upper bit of ID is used to remember relationship between "linked"
-	 * registers. Example:
-	 * r1 = r2;    both will have r1->id == r2->id == N
-	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->delta == 10
-	 * r3 = r2;    both will have r3->id == r2->id == N
-	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->delta == 10
-	 */
-#define BPF_ADD_CONST64 (1U << 31)
-#define BPF_ADD_CONST32 (1U << 30)
-#define BPF_ADD_CONST (BPF_ADD_CONST64 | BPF_ADD_CONST32)
-	u32 id;
 	/*
 	 * Tracks the parent object this register was derived from.
 	 * Used for cascading invalidation: when the parent object is
@@ -206,7 +193,41 @@ struct bpf_reg_state {
 	 * during state comparisons.
 	 */
 	u32 map_uid;
+	/*
+	 * For scalar types (SCALAR_VALUE), this represents our knowledge of
+	 * the actual value.
+	 * For pointer types, this represents the variable part of the offset
+	 * from the pointed-to object, and is shared with all bpf_reg_states
+	 * with the same id as us. It is used to determine if any memory access
+	 * using this register will result in a bad access.
+	 * The last member: its padding is at the end of the register.
+	 */
+	struct scalar;
 };
+
+/* reg->raw stands for the union where it is compared, hashed, copied or cleared */
+static_assert(offsetofend(struct bpf_reg_state, raw) == offsetof(struct bpf_reg_state, parent_id));
+
+static inline bool scalar_equal(const struct scalar *a, const struct scalar *b)
+{
+	return a->r64.base == b->r64.base && a->r64.size == b->r64.size &&
+	       a->r32.base == b->r32.base && a->r32.size == b->r32.size &&
+	       a->var_off.value == b->var_off.value && a->var_off.mask == b->var_off.mask &&
+	       a->base == b->base && a->step == b->step;
+}
+
+/* The type and what goes with it: the object that a pointer points to */
+static inline bool reg_fixed_part_equal(const struct bpf_reg_state *ra,
+					const struct bpf_reg_state *rb)
+{
+	return ra->type == rb->type && !memcmp(&ra->raw, &rb->raw, sizeof(ra->raw));
+}
+
+/* All but the ids */
+static inline bool reg_value_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
+{
+	return reg_fixed_part_equal(ra, rb) && scalar_equal(scalar_of(ra), scalar_of(rb));
+}
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)
 {
@@ -361,10 +382,10 @@ struct bpf_loop_iters {
 	/*
 	 * The variable that the latches of all back edges test, or -1, and what
 	 * it can be at the loop header: what it is at the entry or what one of
-	 * the latches lets through.
+	 * the latches lets through. A 32-bit latch bounds its low 32 bits only.
 	 */
 	int iv_reg;
-	struct cnum64 iv_range;
+	struct scalar iv_range;
 	/* a jump that counts: it leaves the loop in the last iteration, if not before. Or -1 */
 	int count_insn;
 	/* a pointer to the stack that stores go through moves in the loop */
@@ -427,7 +448,7 @@ struct loop_stack_entry {
 	u32 walk_id;
 	u32 walk_patience;
 	int iv_reg;
-	struct cnum64 iv_range;
+	struct scalar iv_range;
 	int count_insn;
 };
 
@@ -1112,25 +1133,16 @@ struct bpf_id_pair {
  *   comes out for it, only if the same places have the same names.
  * - bpf_flow_return() puts the ids of the call that waits back. All other ids get new values.
  * - What comes out has the ranges of all calls that share the state at the entry. So a name is good
- *   for what holds whatever the ranges are: the same object. Other ids have no name: a number
- *   loses its id, any other argument keeps the frames of the caller, see arg_needs_caller().
- * - env->id_gen stays below BPF_MAX_ID. So no id is a name or has a bit of BPF_ADD_CONST.
+ *   for what holds whatever the ranges are: the same object. Other ids have no name: such an
+ *   argument keeps the frames of the caller, see arg_needs_caller().
+ * - env->id_gen stays below BPF_MAX_ID. So no id is a name.
  */
 #define BPF_INHERITED_ID	0x20000000
 #define BPF_MAX_ID		(BPF_INHERITED_ID / 2)
 
 struct bpf_idmap {
-	u32 tmp_id_gen;
 	u32 cnt;
 	struct bpf_id_pair map[BPF_ID_MAP_SIZE];
-};
-
-struct bpf_idset {
-	u32 num_ids;
-	struct {
-		u32 id;
-		u32 cnt;
-	} entries[BPF_ID_MAP_SIZE];
 };
 
 struct bpf_liveness;
@@ -1278,10 +1290,7 @@ struct bpf_verifier_env {
 	 * via callx. Allocated when the first such edge is recorded.
 	 */
 	unsigned long *callx_edges;
-	union {
-		struct bpf_idmap idmap_scratch;
-		struct bpf_idset idset_scratch;
-	};
+	struct bpf_idmap idmap_scratch;
 	struct {
 		int *insn_state;
 		int *insn_stack;
@@ -1447,12 +1456,6 @@ void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num);
 		bpf_log(&env->log, "verifier bug: " fmt "\n", ##args);				\
 	})
 
-static inline void clear_scalar_id(struct bpf_reg_state *reg)
-{
-	reg->id = 0;
-	reg->delta = 0;
-}
-
 static inline void mark_calls_callback(struct bpf_verifier_env *env, int idx)
 {
 	env->insn_aux_data[idx].calls_callback = true;
@@ -1589,7 +1592,6 @@ void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm);
 void bpf_mark_reg_unknown(struct bpf_reg_state *reg);
 int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size);
-void bpf_clear_singular_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
 static inline int bpf_get_spi(s32 off)
 {
@@ -1902,6 +1904,7 @@ u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
+bool bpf_is_dynptr_slice_rdwr_kfunc(struct bpf_insn *insn);
 int bpf_compute_const_regs(struct bpf_verifier_env *env);
 int bpf_prune_dead_branches(struct bpf_verifier_env *env);
 int bpf_check_cfg(struct bpf_verifier_env *env);
@@ -2062,11 +2065,14 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env);
 bool bpf_same_memory_origin(const struct bpf_reg_state *reg_a,
 			    const struct bpf_reg_state *reg_b);
 void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax);
+void scalar_set_unknown(struct scalar *s);
+void scalar_set_const(struct scalar *s, u64 imm);
+void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar *b);
+void scalar_zext32(struct scalar *s);
+void scalar_union(struct scalar *acc, const struct scalar *src);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-		      struct cnum64 r64, struct cnum32 r32, u16 base, u16 step);
+		      const struct scalar *range);
 bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b);
-void bpf_reg_union_range(struct bpf_reg_state *acc, const struct bpf_reg_state *src);
-void bpf_reg_forget_range(struct bpf_reg_state *reg);
 void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *old,
 			 const struct bpf_loop_rungs *rungs, int linear);
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
@@ -2078,6 +2084,7 @@ int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_
 const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx);
 bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 spi);
+bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi);
 int bpf_compute_live_registers(struct bpf_verifier_env *env);
 
 #define BPF_MAP_KEY_POISON	(1ULL << 63)
@@ -2224,6 +2231,13 @@ int bpf_init_scev(struct bpf_verifier_env *env);
 void bpf_free_scev(struct bpf_verifier_env *env);
 int bpf_compute_scev(struct bpf_verifier_env *env);
 int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool taken_leaves);
+bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
+			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
+			      u32 *bits);
+bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
+		       s64 *off);
+bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);
+bool bpf_scev_in_slice_slots(struct bpf_verifier_env *env, int off, u32 size, bool fixed_off);
 
 int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			   struct bpf_loop_iters *iters);

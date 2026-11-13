@@ -436,7 +436,8 @@ static int omap2_mcspi_tx_dma(struct spi_device *spi,
 	if (!tx)
 		return -EIO;
 
-	dmaengine_desc_set_callback(tx, omap2_mcspi_tx_callback, NULL, spi);
+	tx->callback = omap2_mcspi_tx_callback;
+	tx->callback_param = spi;
 
 	return dma_submit_error(dmaengine_submit(tx));
 }
@@ -524,7 +525,8 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 		goto out_free_sg;
 	}
 
-	dmaengine_desc_set_callback(tx, omap2_mcspi_rx_callback, NULL, spi);
+	tx->callback = omap2_mcspi_rx_callback;
+	tx->callback_param = spi;
 	ret = dma_submit_error(dmaengine_submit(tx));
 	if (ret)
 		goto out_free_sg;

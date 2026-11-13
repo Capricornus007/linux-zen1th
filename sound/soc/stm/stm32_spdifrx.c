@@ -302,7 +302,8 @@ static int stm32_spdifrx_dma_ctrl_start(struct stm32_spdifrx_data *spdifrx)
 	if (!spdifrx->desc)
 		return -EINVAL;
 
-	dmaengine_desc_set_callback(spdifrx->desc, stm32_spdifrx_dma_complete, NULL, spdifrx);
+	spdifrx->desc->callback = stm32_spdifrx_dma_complete;
+	spdifrx->desc->callback_param = spdifrx;
 	cookie = dmaengine_submit(spdifrx->desc);
 	err = dma_submit_error(cookie);
 	if (err)

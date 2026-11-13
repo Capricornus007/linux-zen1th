@@ -295,7 +295,8 @@ rzv2h_rspi_setup_dma_channel(struct rzv2h_rspi_priv *rspi,
 		return ERR_PTR(-EAGAIN);
 
 	if (direction == DMA_DEV_TO_MEM) {
-		dmaengine_desc_set_callback(desc, rzv2h_rspi_dma_complete, NULL, rspi);
+		desc->callback = rzv2h_rspi_dma_complete;
+		desc->callback_param = rspi;
 	}
 
 	return desc;

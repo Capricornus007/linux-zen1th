@@ -1395,7 +1395,8 @@ static int cqspi_direct_read_execute(struct cqspi_flash_pdata *f_pdata,
 		goto err_unmap;
 	}
 
-	dmaengine_desc_set_callback(tx, cqspi_rx_dma_callback, NULL, cqspi);
+	tx->callback = cqspi_rx_dma_callback;
+	tx->callback_param = cqspi;
 	cookie = dmaengine_submit(tx);
 	reinit_completion(&cqspi->rx_dma_complete);
 

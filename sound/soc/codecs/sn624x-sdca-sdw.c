@@ -1736,9 +1736,11 @@ static int sn624x_sdca_sdw_probe(struct sdw_slave *slave,
 	regmap = devm_regmap_init_sdw_mbq_cfg(&slave->dev, slave,
 					      &sn624x_sdca_regmap,
 					      &sn624x_sdca_mbq_cfg);
-	if (IS_ERR(regmap))
-		return dev_err_probe(&slave->dev, PTR_ERR(regmap),
-				     "devm_regmap_init_sdw_mbq_cfg failed\n");
+	if (IS_ERR(regmap)) {
+		dev_err(&slave->dev, "sn624x: devm_regmap_init_sdw_mbq_cfg failed (%ld)\n",
+			PTR_ERR(regmap));
+		return PTR_ERR(regmap);
+	}
 
 	ret = sn624x_sdca_init(&slave->dev, regmap, slave);
 	if (ret < 0)

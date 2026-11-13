@@ -1705,17 +1705,11 @@ struct adv_info *hci_get_next_instance(struct hci_dev *hdev, u8 instance)
 }
 
 /* This function requires the caller holds hdev->lock */
-int hci_remove_adv_instance(struct hci_dev *hdev, u8 instance)
+void hci_free_adv_instance(struct hci_dev *hdev, struct adv_info *adv_instance)
 {
-	struct adv_info *adv_instance;
+	BT_DBG("%s removing %dMR", hdev->name, adv_instance->instance);
 
-	adv_instance = hci_find_adv_instance(hdev, instance);
-	if (!adv_instance)
-		return -ENOENT;
-
-	BT_DBG("%s removing %dMR", hdev->name, instance);
-
-	if (hdev->cur_adv_instance == instance) {
+	if (hdev->cur_adv_instance == adv_instance->instance) {
 		if (hdev->adv_instance_timeout) {
 			cancel_delayed_work(&hdev->adv_instance_expire);
 			hdev->adv_instance_timeout = false;
@@ -1729,6 +1723,18 @@ int hci_remove_adv_instance(struct hci_dev *hdev, u8 instance)
 	kfree(adv_instance);
 
 	hdev->adv_instance_cnt--;
+}
+
+/* This function requires the caller holds hdev->lock */
+int hci_remove_adv_instance(struct hci_dev *hdev, u8 instance)
+{
+	struct adv_info *adv_instance;
+
+	adv_instance = hci_find_adv_instance(hdev, instance);
+	if (!adv_instance)
+		return -ENOENT;
+
+	hci_free_adv_instance(hdev, adv_instance);
 
 	return 0;
 }
@@ -2575,6 +2581,10 @@ struct hci_dev *hci_alloc_dev_priv(int sizeof_priv)
 	hdev->le_min_key_size = SMP_MIN_ENC_KEY_SIZE;
 	hdev->le_tx_def_phys = HCI_LE_SET_PHY_1M;
 	hdev->le_rx_def_phys = HCI_LE_SET_PHY_1M;
+	hdev->hdt_def_mic_len = 0x02;	/* 128-bit */
+	hdev->hdt_def_format = 0x00;	/* No preference */
+	hdev->hdt_def_rates = 0x001f;	/* All defined HDT rates */
+	hdev->eks_oppt = true;		/* Opportunistic encryption enabled */
 	hdev->le_num_of_adv_sets = HCI_MAX_ADV_INSTANCES;
 	hdev->def_multi_adv_rotation_duration = HCI_DEFAULT_ADV_DURATION;
 	hdev->def_le_autoconnect_timeout = HCI_LE_CONN_TIMEOUT;

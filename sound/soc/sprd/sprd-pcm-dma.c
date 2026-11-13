@@ -287,9 +287,8 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 		}
 
 		if (!runtime->no_period_wakeup) {
-			dmaengine_desc_set_callback(data->desc,
-						    sprd_pcm_dma_complete,
-						    NULL, dma_private);
+			data->desc->callback = sprd_pcm_dma_complete;
+			data->desc->callback_param = dma_private;
 		}
 	}
 

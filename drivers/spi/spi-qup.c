@@ -429,7 +429,8 @@ static int spi_qup_prep_sg(struct spi_controller *host, struct scatterlist *sgl,
 	if (IS_ERR_OR_NULL(desc))
 		return desc ? PTR_ERR(desc) : -EINVAL;
 
-	dmaengine_desc_set_callback(desc, callback, NULL, qup);
+	desc->callback = callback;
+	desc->callback_param = qup;
 
 	cookie = dmaengine_submit(desc);
 

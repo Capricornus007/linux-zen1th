@@ -143,7 +143,7 @@ struct ath12k_skb_rxcb {
 	struct hal_rx_desc *rx_desc;
 	u8 err_rel_src;
 	u8 err_code;
-	u8 hw_link_id;
+	u8 drv_link_id;
 	u8 unmapped;
 	u8 is_frag;
 	u8 tid;
@@ -697,6 +697,7 @@ struct ath12k {
 	u8 radio_idx;
 
 	struct completion peer_assoc_done;
+	struct completion peer_ext_event_done;
 	struct list_head peer_delete_waits;
 
 	int install_key_status;

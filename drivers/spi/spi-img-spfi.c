@@ -334,7 +334,8 @@ static int img_spfi_start_dma(struct spi_controller *host,
 		if (!rxdesc)
 			goto stop_dma;
 
-		dmaengine_desc_set_callback(rxdesc, img_spfi_dma_rx_cb, NULL, spfi);
+		rxdesc->callback = img_spfi_dma_rx_cb;
+		rxdesc->callback_param = spfi;
 	}
 
 	if (xfer->tx_buf) {
@@ -357,7 +358,8 @@ static int img_spfi_start_dma(struct spi_controller *host,
 		if (!txdesc)
 			goto stop_dma;
 
-		dmaengine_desc_set_callback(txdesc, img_spfi_dma_tx_cb, NULL, spfi);
+		txdesc->callback = img_spfi_dma_tx_cb;
+		txdesc->callback_param = spfi;
 	}
 
 	if (xfer->rx_buf) {

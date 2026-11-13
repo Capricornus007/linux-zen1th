@@ -2693,10 +2693,7 @@ static int __maybe_unused nau8825_suspend(struct snd_soc_component *component)
 {
 	struct nau8825 *nau8825 = snd_soc_component_get_drvdata(component);
 
-	if (!nau8825->suspend_irq_disabled) {
-		disable_irq(nau8825->irq);
-		nau8825->suspend_irq_disabled = true;
-	}
+	disable_irq(nau8825->irq);
 	snd_soc_dapm_force_bias_level(nau8825->dapm, SND_SOC_BIAS_OFF);
 	/* Power down codec power; don't suppoet button wakeup */
 	snd_soc_dapm_disable_pin(nau8825->dapm, "SAR");
@@ -2714,20 +2711,12 @@ static int __maybe_unused nau8825_resume(struct snd_soc_component *component)
 	int ret;
 
 	regcache_cache_only(nau8825->regmap, false);
-	ret = regcache_sync(nau8825->regmap);
-	if (ret) {
-		regcache_cache_only(nau8825->regmap, true);
-		regcache_mark_dirty(nau8825->regmap);
-		return ret;
-	}
+	regcache_sync(nau8825->regmap);
 	nau8825->xtalk_protect = true;
 	ret = nau8825_sema_acquire(nau8825, 0);
 	if (ret)
 		nau8825->xtalk_protect = false;
-	if (nau8825->suspend_irq_disabled) {
-		nau8825->suspend_irq_disabled = false;
-		enable_irq(nau8825->irq);
-	}
+	enable_irq(nau8825->irq);
 
 	return 0;
 }

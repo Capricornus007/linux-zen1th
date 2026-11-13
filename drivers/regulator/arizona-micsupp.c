@@ -10,7 +10,6 @@
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/bitops.h>
-#include <linux/devm-helpers.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -256,10 +255,7 @@ static int arizona_micsupp_common_init(struct platform_device *pdev,
 	struct regulator_config config = { };
 	int ret;
 
-	ret = devm_work_autocancel(&pdev->dev, &micsupp->check_cp_work,
-				   arizona_micsupp_check_cp);
-	if (ret)
-		return ret;
+	INIT_WORK(&micsupp->check_cp_work, arizona_micsupp_check_cp);
 
 	micsupp->init_data.consumer_supplies = &micsupp->supply;
 	micsupp->supply.dev_name = dev_name(micsupp->dev);

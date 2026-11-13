@@ -73,8 +73,8 @@ static int es9356_sdw_component_probe(struct snd_soc_component *component)
 }
 
 static const DECLARE_TLV_DB_SCALE(out_vol_tlv, -9600, 12, 0);
-static const DECLARE_TLV_DB_SCALE(amic_gain_tlv, 0, 3, 0);
-static const DECLARE_TLV_DB_SCALE(dmic_gain_tlv, 0, 6, 0);
+static const DECLARE_TLV_DB_SCALE(amic_gain_tlv, 0, 300, 0);
+static const DECLARE_TLV_DB_SCALE(dmic_gain_tlv, 0, 600, 0);
 
 static const struct snd_kcontrol_new es9356_sdca_controls[] = {
 	SDCA_SINGLE_Q78_TLV("FU41 Left Playback Volume",
@@ -293,15 +293,13 @@ static int es9356_sdca_button(unsigned int *buffer)
 
 static int es9356_sdca_button_detect(struct es9356_sdw_priv *es9356)
 {
-	unsigned int offset, idx, val, owner;
+	unsigned int btn_type = 0, offset, idx, val, owner;
 	unsigned int button[3];
-	int btn_type = 0, ret;
+	int ret;
 
 	ret = regmap_read(es9356->regmap,
 		SDW_SDCA_CTL(FUNC_NUM_HID, ES9356_SDCA_ENT_HID01, ES9356_SDCA_CTL_HIDTX_CURRENT_OWNER, 0), &owner);
-	if (ret < 0)
-		return ret;
-	if (owner == 0x01)
+	if (ret < 0 || owner == 0x01)
 		return 0;
 
 	ret = regmap_read(es9356->regmap, ES9356_BUF_ADDR_HID, &offset);
@@ -321,9 +319,6 @@ button_det_end:
 	if (owner == 0x00)
 		regmap_write(es9356->regmap,
 			SDW_SDCA_CTL(FUNC_NUM_HID, ES9356_SDCA_ENT_HID01, ES9356_SDCA_CTL_HIDTX_CURRENT_OWNER, 0), 0x01);
-
-	if (ret < 0)
-		return ret;
 
 	return btn_type;
 }

@@ -335,10 +335,10 @@ _cali_fail_:
 	return ret;
 }
 
-static int rt712_sdca_button_detect(struct rt712_sdca_priv *rt712)
+static unsigned int rt712_sdca_button_detect(struct rt712_sdca_priv *rt712)
 {
-	unsigned int offset, idx, val, owner;
-	int btn_type = 0, ret;
+	unsigned int btn_type = 0, offset, idx, val, owner;
+	int ret;
 	unsigned char buf[3];
 
 	/* get current UMP message owner */
@@ -346,7 +346,7 @@ static int rt712_sdca_button_detect(struct rt712_sdca_priv *rt712)
 		SDW_SDCA_CTL(FUNC_NUM_HID, RT712_SDCA_ENT_HID01, RT712_SDCA_CTL_HIDTX_CURRENT_OWNER, 0),
 		&owner);
 	if (ret < 0)
-		return ret;
+		return 0;
 
 	/* if owner is device then there is no button event from device */
 	if (owner == 1)
@@ -416,9 +416,6 @@ _end_btn_det_:
 					RT712_SDCA_CTL_HIDTX_CURRENT_OWNER, 0), 0x01);
 	}
 
-	if (ret < 0)
-		return ret;
-
 	return btn_type;
 }
 
@@ -487,17 +484,6 @@ static void rt712_sdca_jack_detect_handler(struct work_struct *work)
 	/* SDW_SCP_SDCA_INT_SDCA_8 is used for button detection */
 	if (rt712->scp_sdca_stat2 & SDW_SCP_SDCA_INT_SDCA_8)
 		btn_type = rt712_sdca_button_detect(rt712);
-
-	if (btn_type < 0) {
-		unsigned int mask = SND_JACK_HEADSET;
-
-		if (rt712->jack_type != SND_JACK_HEADSET)
-			mask |= SND_JACK_BTN_0 | SND_JACK_BTN_1 |
-				SND_JACK_BTN_2 | SND_JACK_BTN_3;
-
-		snd_soc_jack_report(rt712->hs_jack, rt712->jack_type, mask);
-		return;
-	}
 
 	if (rt712->jack_type == 0)
 		btn_type = 0;

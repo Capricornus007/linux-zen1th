@@ -1668,7 +1668,18 @@ static struct platform_driver palmas_driver = {
 	},
 	.probe = palmas_regulators_probe,
 };
-subsys_platform_driver(palmas_driver);
+
+static int __init palmas_init(void)
+{
+	return platform_driver_register(&palmas_driver);
+}
+subsys_initcall(palmas_init);
+
+static void __exit palmas_exit(void)
+{
+	platform_driver_unregister(&palmas_driver);
+}
+module_exit(palmas_exit);
 
 MODULE_AUTHOR("Graeme Gregory <gg@slimlogic.co.uk>");
 MODULE_DESCRIPTION("Palmas voltage regulator driver");

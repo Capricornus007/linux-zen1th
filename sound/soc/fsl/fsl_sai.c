@@ -88,16 +88,14 @@ static const struct snd_kcontrol_new fsl_sai_timestamp_ctrls[] = {
 };
 
 /**
- * fsl_sai_dir_is_synced - Check if the opposite stream is synced to @dir
+ * fsl_sai_dir_is_synced - Check if stream is synced by the opposite stream
+ *
+ * SAI supports synchronous mode using bit/frame clocks of either Transmitter's
+ * or Receiver's for both streams. This function is used to check if clocks of
+ * the stream's are synced by the opposite stream.
+ *
  * @sai: SAI context
- * @dir: stream direction, TX or RX
- *
- * SAI supports synchronous mode, where one direction uses the bit clock and
- * frame sync of the other. This function checks whether @dir provides the
- * clocks, i.e. @dir runs in asynchronous mode while the opposite direction
- * runs in synchronous mode.
- *
- * Return: true if the opposite direction uses the clocks of @dir.
+ * @dir: stream direction
  */
 static inline bool fsl_sai_dir_is_synced(struct fsl_sai *sai, int dir)
 {
@@ -148,8 +146,7 @@ static irqreturn_t fsl_sai_isr(int irq, void *devid)
 	mask = (FSL_SAI_FLAGS >> FSL_SAI_CSR_xIE_SHIFT) << FSL_SAI_CSR_xF_SHIFT;
 
 	/* Tx IRQ */
-	if (regmap_read(sai->regmap, FSL_SAI_TCSR(ofs), &xcsr))
-		return IRQ_NONE;
+	regmap_read(sai->regmap, FSL_SAI_TCSR(ofs), &xcsr);
 	flags = xcsr & mask;
 
 	if (flags)
@@ -180,8 +177,7 @@ static irqreturn_t fsl_sai_isr(int irq, void *devid)
 
 irq_rx:
 	/* Rx IRQ */
-	if (regmap_read(sai->regmap, FSL_SAI_RCSR(ofs), &xcsr))
-		goto out;
+	regmap_read(sai->regmap, FSL_SAI_RCSR(ofs), &xcsr);
 	flags = xcsr & mask;
 
 	if (flags)
@@ -632,14 +628,8 @@ static int fsl_sai_hw_params(struct snd_pcm_substream *substream,
 
 	if (sai->slots[tx])
 		slots = sai->slots[tx];
-	else if (sai->bclk_ratio) {
-		if (sai->bclk_ratio < slot_width) {
-			dev_err(cpu_dai->dev, "bclk ratio %u < slot width %u\n",
-				sai->bclk_ratio, slot_width);
-			return -EINVAL;
-		}
+	else if (sai->bclk_ratio)
 		slots = sai->bclk_ratio / slot_width;
-	}
 
 	pins = DIV_ROUND_UP(channels, slots);
 
@@ -720,7 +710,8 @@ static int fsl_sai_hw_params(struct snd_pcm_substream *substream,
 
 	if (fsl_sai_dir_is_synced(sai, adir)) {
 		regmap_update_bits(sai->regmap, FSL_SAI_xCR4(!tx, ofs),
-				   FSL_SAI_CR4_SYWD_MASK | FSL_SAI_CR4_FRSZ_MASK,
+				   FSL_SAI_CR4_SYWD_MASK | FSL_SAI_CR4_FRSZ_MASK |
+				   FSL_SAI_CR4_CHMOD_MASK,
 				   val_cr4);
 		regmap_update_bits(sai->regmap, FSL_SAI_xCR5(!tx, ofs),
 				   FSL_SAI_CR5_WNW_MASK | FSL_SAI_CR5_W0W_MASK |
@@ -858,8 +849,7 @@ static void fsl_sai_config_disable(struct fsl_sai *sai, int dir)
 {
 	unsigned int ofs = sai->soc_data->reg_offset;
 	bool tx = dir == TX;
-	u32 xcsr, mask;
-	int ret;
+	u32 xcsr, count = 100, mask;
 
 	if (sai->soc_data->mclk_with_tere && sai->mclk_direction_output)
 		mask = FSL_SAI_CSR_TERE;
@@ -870,15 +860,10 @@ static void fsl_sai_config_disable(struct fsl_sai *sai, int dir)
 			   mask, 0);
 
 	/* TERE will remain set till the end of current frame */
-	ret = regmap_read_poll_timeout_atomic(sai->regmap, FSL_SAI_xCSR(tx, ofs),
-					      xcsr, !(xcsr & FSL_SAI_CSR_TERE),
-					      10, 1000);
-	if (ret == -ETIMEDOUT)
-		dev_warn(&sai->pdev->dev, "%cx not disabled at frame end\n",
-			 tx ? 'T' : 'R');
-	else if (ret)
-		dev_err(&sai->pdev->dev, "failed to read %cSCR : %d\n",
-			tx ? 'T' : 'R', ret);
+	do {
+		udelay(10);
+		regmap_read(sai->regmap, FSL_SAI_xCSR(tx, ofs), &xcsr);
+	} while (--count && xcsr & FSL_SAI_CSR_TERE);
 
 	regmap_update_bits(sai->regmap, FSL_SAI_xCSR(tx, ofs),
 			   FSL_SAI_CSR_FR, FSL_SAI_CSR_FR);
@@ -1510,20 +1495,23 @@ static int fsl_sai_read_dlcfg(struct fsl_sai *sai)
 		 */
 		ret = of_property_read_u32_index(np, propname, index++, &type);
 		if (ret)
-			return ret;
+			return -EINVAL;
 
 		ret = of_property_read_u32_index(np, propname, index++, &rx);
 		if (ret)
-			return ret;
+			return -EINVAL;
 
 		ret = of_property_read_u32_index(np, propname, index++, &tx);
 		if (ret)
-			return ret;
+			return -EINVAL;
 
 		if ((rx & ~soc_dl) || (tx & ~soc_dl)) {
 			dev_err(dev, "dataline cfg[%d] setting error, mask is 0x%x\n", i, soc_dl);
 			return -EINVAL;
 		}
+
+		rx = rx & soc_dl;
+		tx = tx & soc_dl;
 
 		cfg[i].type = type;
 		cfg[i].pins[0] = hweight8(rx);
@@ -1601,10 +1589,12 @@ static int fsl_sai_probe(struct platform_device *pdev)
 
 	for (i = 1; i < FSL_SAI_MCLK_MAX; i++) {
 		sprintf(tmp, "mclk%d", i);
-		sai->mclk_clk[i] = devm_clk_get_optional(dev, tmp);
-		if (IS_ERR(sai->mclk_clk[i]))
-			return dev_err_probe(dev, PTR_ERR(sai->mclk_clk[i]),
-					     "failed to get mclk%d clock\n", i);
+		sai->mclk_clk[i] = devm_clk_get(dev, tmp);
+		if (IS_ERR(sai->mclk_clk[i])) {
+			dev_err(dev, "failed to get mclk%d clock: %ld\n",
+					i, PTR_ERR(sai->mclk_clk[i]));
+			sai->mclk_clk[i] = NULL;
+		}
 	}
 
 	if (sai->soc_data->mclk0_is_mclk1)
@@ -1627,8 +1617,10 @@ static int fsl_sai_probe(struct platform_device *pdev)
 
 	/* read dataline mask for rx and tx*/
 	ret = fsl_sai_read_dlcfg(sai);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(dev, "failed to read dlcfg %d\n", ret);
 		return ret;
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -1708,7 +1700,9 @@ static int fsl_sai_probe(struct platform_device *pdev)
 	if (ret < 0)
 		dev_warn(dev, "Error reading SAI version: %d\n", ret);
 
-	fsl_sai_reset_hw(dev);
+	ret = fsl_sai_reset_hw(dev);
+	if (ret < 0)
+		dev_warn(dev, "Failed to reset hardware: %d\n", ret);
 
 	/* Select MCLK direction */
 	if (sai->mclk_direction_output &&
@@ -1723,8 +1717,10 @@ static int fsl_sai_probe(struct platform_device *pdev)
 
 	ret = devm_request_irq(dev, irq, fsl_sai_isr, IRQF_SHARED,
 			       np->name, sai);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "failed to claim irq %u\n", irq);
 		goto err_pm_get_sync;
+	}
 
 	if (of_device_is_compatible(np, "fsl,imx952-sai") &&
 	    !of_property_read_string(np, "fsl,sai-amix-mode", &str)) {
@@ -1985,7 +1981,7 @@ static int fsl_sai_runtime_resume(struct device *dev)
 
 	ret = regcache_sync(sai->regmap);
 	if (ret)
-		goto remove_qos;
+		goto disable_rx_clk;
 
 	if (sai->soc_data->mclk_with_tere && sai->mclk_direction_output)
 		regmap_update_bits(sai->regmap, FSL_SAI_TCSR(ofs),
@@ -1993,12 +1989,7 @@ static int fsl_sai_runtime_resume(struct device *dev)
 
 	return 0;
 
-remove_qos:
-	regcache_cache_only(sai->regmap, true);
-
-	if (sai->soc_data->flags & PMQOS_CPU_LATENCY)
-		cpu_latency_qos_remove_request(&sai->pm_qos_req);
-
+disable_rx_clk:
 	if (sai->mclk_streams & BIT(SNDRV_PCM_STREAM_CAPTURE))
 		clk_disable_unprepare(sai->mclk_clk[sai->mclk_id[0]]);
 disable_tx_clk:

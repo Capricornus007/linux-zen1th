@@ -418,7 +418,8 @@ static int uniphier_spi_transfer_one_dma(struct spi_controller *host,
 		if (!rxdesc)
 			goto out_err_prep;
 
-		dmaengine_desc_set_callback(rxdesc, uniphier_spi_dma_rxcb, NULL, host);
+		rxdesc->callback = uniphier_spi_dma_rxcb;
+		rxdesc->callback_param = host;
 
 		uniphier_spi_irq_enable(priv, SSI_IE_RXRE);
 		atomic_or(SSI_DMA_RX_BUSY, &priv->dma_busy);
@@ -444,7 +445,8 @@ static int uniphier_spi_transfer_one_dma(struct spi_controller *host,
 		if (!txdesc)
 			goto out_err_prep;
 
-		dmaengine_desc_set_callback(txdesc, uniphier_spi_dma_txcb, NULL, host);
+		txdesc->callback = uniphier_spi_dma_txcb;
+		txdesc->callback_param = host;
 
 		uniphier_spi_irq_enable(priv, SSI_IE_TXRE);
 		atomic_or(SSI_DMA_TX_BUSY, &priv->dma_busy);

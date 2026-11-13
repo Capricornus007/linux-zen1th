@@ -1630,10 +1630,8 @@ static int __maybe_unused nau8821_suspend(struct snd_soc_component *component)
 {
 	struct nau8821 *nau8821 = snd_soc_component_get_drvdata(component);
 
-	if (nau8821->irq && !nau8821->suspend_irq_disabled) {
+	if (nau8821->irq)
 		disable_irq(nau8821->irq);
-		nau8821->suspend_irq_disabled = true;
-	}
 
 	if (nau8821->jdet_active)
 		cancel_delayed_work_sync(&nau8821->jdet_work);
@@ -1651,19 +1649,11 @@ static int __maybe_unused nau8821_suspend(struct snd_soc_component *component)
 static int __maybe_unused nau8821_resume(struct snd_soc_component *component)
 {
 	struct nau8821 *nau8821 = snd_soc_component_get_drvdata(component);
-	int ret;
 
 	regcache_cache_only(nau8821->regmap, false);
-	ret = regcache_sync(nau8821->regmap);
-	if (ret) {
-		regcache_cache_only(nau8821->regmap, true);
-		regcache_mark_dirty(nau8821->regmap);
-		return ret;
-	}
-	if (nau8821->suspend_irq_disabled) {
-		nau8821->suspend_irq_disabled = false;
+	regcache_sync(nau8821->regmap);
+	if (nau8821->irq)
 		enable_irq(nau8821->irq);
-	}
 
 	return 0;
 }

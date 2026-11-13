@@ -98,7 +98,7 @@ static int tegra_wm8994_init(struct snd_soc_pcm_runtime *rtd)
 			return err;
 		}
 
-		snd_soc_component_set_jack(component, machine->mic_jack, NULL);
+		wm8994_mic_detect(component, machine->mic_jack, 1);
 	}
 
 	return 0;
@@ -113,7 +113,7 @@ static int tegra_wm8994_remove(struct snd_soc_card *card)
 	struct snd_soc_component *component = codec_dai->component;
 
 	if (!machine->gpiod_mic_det && machine->asoc->add_mic_jack)
-		snd_soc_component_set_jack(component, NULL, NULL);
+		wm8994_mic_detect(component, NULL, 1);
 
 	return 0;
 }

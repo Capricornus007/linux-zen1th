@@ -154,7 +154,8 @@ int pxa2xx_spi_dma_prepare(struct driver_data *drv_data,
 	}
 
 	/* We are ready when RX completes */
-	dmaengine_desc_set_callback(rx_desc, pxa2xx_spi_dma_callback, NULL, drv_data);
+	rx_desc->callback = pxa2xx_spi_dma_callback;
+	rx_desc->callback_param = drv_data;
 
 	dmaengine_submit(rx_desc);
 	dmaengine_submit(tx_desc);

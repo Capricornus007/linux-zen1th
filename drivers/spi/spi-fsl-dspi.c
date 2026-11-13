@@ -581,7 +581,8 @@ static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 		return -EIO;
 	}
 
-	dmaengine_desc_set_callback(dma->tx_desc, dspi_tx_dma_callback, NULL, dspi);
+	dma->tx_desc->callback = dspi_tx_dma_callback;
+	dma->tx_desc->callback_param = dspi;
 	if (dma_submit_error(dmaengine_submit(dma->tx_desc))) {
 		dev_err(dev, "DMA submit failed\n");
 		return -EINVAL;
@@ -599,7 +600,8 @@ static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 		return -EIO;
 	}
 
-	dmaengine_desc_set_callback(dma->rx_desc, dspi_rx_dma_callback, NULL, dspi);
+	dma->rx_desc->callback = dspi_rx_dma_callback;
+	dma->rx_desc->callback_param = dspi;
 	if (dma_submit_error(dmaengine_submit(dma->rx_desc))) {
 		dev_err(dev, "DMA submit failed\n");
 		return -EINVAL;

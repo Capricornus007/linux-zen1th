@@ -27,7 +27,7 @@ static bool dw_spi_dma_chan_filter(struct dma_chan *chan, void *param)
 {
 	struct dw_dma_slave *s = param;
 
-	if (s->dma_dev != dmaengine_get_provider_device(chan))
+	if (s->dma_dev != chan->device->dev)
 		return false;
 
 	chan->private = s;
@@ -397,7 +397,8 @@ static int dw_spi_dma_submit_tx(struct dw_spi *dws, struct scatterlist *sgl,
 	if (!txdesc)
 		return -ENOMEM;
 
-	dmaengine_desc_set_callback(txdesc, dw_spi_dma_tx_done, NULL, dws);
+	txdesc->callback = dw_spi_dma_tx_done;
+	txdesc->callback_param = dws;
 
 	cookie = dmaengine_submit(txdesc);
 	ret = dma_submit_error(cookie);
@@ -497,7 +498,8 @@ static int dw_spi_dma_submit_rx(struct dw_spi *dws, struct scatterlist *sgl,
 	if (!rxdesc)
 		return -ENOMEM;
 
-	dmaengine_desc_set_callback(rxdesc, dw_spi_dma_rx_done, NULL, dws);
+	rxdesc->callback = dw_spi_dma_rx_done;
+	rxdesc->callback_param = dws;
 
 	cookie = dmaengine_submit(rxdesc);
 	ret = dma_submit_error(cookie);

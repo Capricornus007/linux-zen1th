@@ -706,9 +706,11 @@ static int bcm2835_spi_prepare_sg(struct spi_controller *ctlr,
 	 * RX-only transfers; else by the TX channel for TX-only transfers.
 	 */
 	if (!is_tx) {
-		dmaengine_desc_set_callback(desc, bcm2835_spi_dma_rx_done, NULL, ctlr);
+		desc->callback = bcm2835_spi_dma_rx_done;
+		desc->callback_param = ctlr;
 	} else if (!tfr->rx_buf) {
-		dmaengine_desc_set_callback(desc, bcm2835_spi_dma_tx_done, NULL, ctlr);
+		desc->callback = bcm2835_spi_dma_tx_done;
+		desc->callback_param = ctlr;
 		bs->target = target;
 	}
 

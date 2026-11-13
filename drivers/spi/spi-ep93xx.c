@@ -418,7 +418,8 @@ static int ep93xx_spi_dma_transfer(struct spi_controller *host)
 	}
 
 	/* We are ready when RX is done */
-	dmaengine_desc_set_callback(rxd, ep93xx_spi_dma_callback, NULL, host);
+	rxd->callback = ep93xx_spi_dma_callback;
+	rxd->callback_param = host;
 
 	/* Now submit both descriptors and start DMA */
 	dmaengine_submit(rxd);

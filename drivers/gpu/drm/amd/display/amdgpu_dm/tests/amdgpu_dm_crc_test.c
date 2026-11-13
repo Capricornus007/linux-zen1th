@@ -694,6 +694,7 @@ static void dm_test_crtc_set_crc_source_dprx_connector(struct kunit *test)
 	struct amdgpu_device *adev = dm_kunit_alloc_adev(test);
 	struct amdgpu_crtc *acrtc = dm_test_alloc_crc_crtc(test, adev);
 	struct amdgpu_dm_connector *aconn;
+	struct drm_connector_state *state;
 	int ret;
 
 	aconn = kunit_kzalloc(test, sizeof(*aconn), GFP_KERNEL);
@@ -704,7 +705,9 @@ static void dm_test_crtc_set_crc_source_dprx_connector(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	ret = kunit_add_action_or_reset(test, dm_test_crc_connector_cleanup, &aconn->base);
 	KUNIT_ASSERT_EQ(test, ret, 0);
-	KUNIT_ASSERT_NOT_NULL(test, aconn->base.state);
+	state = drm_atomic_helper_connector_create_state(&aconn->base);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
+	aconn->base.state = state;
 	aconn->base.state->crtc = &acrtc->base;
 	/* Balance the reference the state destroy drops for a set CRTC. */
 	drm_connector_get(&aconn->base);

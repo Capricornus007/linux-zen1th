@@ -47,7 +47,7 @@ static inline bool is_tdx_supported(void)
 	int ret = __tdx_vm_ioctl(vm, cmd, flags, arg, &hw_error);	\
 									\
 	TEST_ASSERT(!ret,						\
-		    "%s failed, rc: %d errno: %i (%s) hw_error: 0x%" PRIx64, \
+		    "%s failed, rc: %i errno: %i (%s) hw_error: 0x%lx",	\
 		    #cmd, ret, errno, strerror(errno), hw_error);	\
 })
 

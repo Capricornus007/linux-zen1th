@@ -1466,7 +1466,6 @@ struct rt5682_priv {
 
 	int jack_type;
 	int irq;
-	bool suspend_irq_disabled;
 	int irq_work_delay_time;
 };
 

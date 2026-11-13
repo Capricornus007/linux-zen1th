@@ -656,6 +656,8 @@ static inline void btintel_pcie_dump_debug_registers(struct hci_dev *hdev)
 	hci_recv_diag(hdev, skb);
 }
 
+static inline bool btintel_pcie_in_d3(struct btintel_pcie_data *data);
+
 static int btintel_pcie_send_sync(struct btintel_pcie_data *data,
 				  struct sk_buff *skb, u32 pkt_type, u16 opcode)
 {
@@ -924,6 +926,219 @@ static void btintel_pcie_release_mac_access(struct btintel_pcie_data *data)
 			bt_dev_info(data->hdev,
 				    "MAC access released: func_ctrl: 0x%8.8x", reg);
 	}
+}
+
+/* btintel_pcie_yoyo_send_hcmds - Send all HCI commands configured for a timepoint */
+static void btintel_pcie_yoyo_send_hcmds(struct btintel_pcie_data *data,
+					 enum btintel_pcie_dbg_timepoint tp)
+{
+	struct btintel_pcie_yoyo_hcmd *hcmd;
+	struct sk_buff *skb;
+	u8 plen;
+	u16 opcode;
+
+	if (!data)
+		return;
+
+	/* Held across __hci_cmd_sync() so cleanup cannot free entries in use */
+	mutex_lock(&data->yoyo.lock);
+	if (!data->yoyo.enabled || !data->hdev) {
+		mutex_unlock(&data->yoyo.lock);
+		return;
+	}
+
+	list_for_each_entry(hcmd, &data->yoyo.hcmd_list, list) {
+		long err;
+
+		if (hcmd->time_point != tp)
+			continue;
+
+		/* Stop if device state changed or driver is shutting down */
+		if (test_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags) ||
+		    test_bit(BTINTEL_PCIE_RECOVERY_IN_PROGRESS, &data->flags) ||
+		    btintel_pcie_in_d3(data) ||
+		    hci_dev_test_flag(data->hdev, HCI_UNREGISTER))
+			break;
+
+		if (hcmd->cmd_len < 3) {
+			bt_dev_warn(data->hdev, "YoYo: hci command too short (%u bytes)",
+				    hcmd->cmd_len);
+			continue;
+		}
+
+		opcode = get_unaligned_le16(hcmd->cmd_data);
+		plen = hcmd->cmd_data[2];
+
+		if (plen != hcmd->cmd_len - 3) {
+			bt_dev_warn(data->hdev,
+				    "YoYo: hci command 0x%04x plen %u does not match tlv payload %u",
+				    opcode, plen, hcmd->cmd_len - 3);
+			continue;
+		}
+
+		bt_dev_dbg(data->hdev, "YoYo: sending hci command, opcode=0x%04x len=%u at tp=%u",
+			   opcode, plen, tp);
+
+		skb = __hci_cmd_sync(data->hdev, opcode, plen,
+				     hcmd->cmd_data + 3,
+				     HCI_CMD_TIMEOUT);
+		/* HCI Err 0x11 corresponds to errno -95 (UNSUPPORTED)
+		 * HCI Err 0x12 corresponds to errno -22 (INVAL)
+		 * HCI Err 0x0C corresponds to errno -16 (EBUSY/CMD DISALLOWED)
+		 */
+		if (IS_ERR(skb)) {
+			err = PTR_ERR(skb);
+
+			/* Command completed with Command Status (0x0F) */
+			if (err == -ENODATA)
+				continue;
+
+			bt_dev_warn(data->hdev, "YoYo: hci command 0x%04x failed: %ld",
+				    opcode, err);
+			/* Stop on timeout or device loss instead of stacking more timeouts */
+			if (err == -ETIMEDOUT || err == -ETIME ||
+			    err == -ENODEV || err == -EHOSTDOWN || err == -EINTR)
+				break;
+		} else {
+			bt_dev_dbg(data->hdev, "YoYo: hci command 0x%04x completed successfully",
+				   opcode);
+			kfree_skb(skb);
+		}
+	}
+
+	mutex_unlock(&data->yoyo.lock);
+}
+
+static void
+btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
+				    u32 time_point)
+{
+	struct btintel_pcie_yoyo_config_set *config_set;
+	resource_size_t bar0_len;
+	int ret;
+	u32 i;
+
+	if (!data)
+		return;
+
+	/* Get the length of PCI BAR0 */
+	bar0_len = pci_resource_len(data->pdev, 0);
+
+	if (!data->yoyo.enabled)
+		return;
+
+	list_for_each_entry(config_set, &data->yoyo.config_set_list, list) {
+		u32 pair_addr, addr, value;
+
+		if (config_set->time_point != time_point)
+			continue;
+
+		switch (config_set->config_set_type) {
+		case BTINTEL_PCIE_CFGSET_CSR:
+		case BTINTEL_PCIE_CFGSET_PERIPH_MAC:
+		case BTINTEL_PCIE_CFGSET_DEVICE_MEM:
+			break;
+		default:
+			BT_WARN("YoYo: unknown/unsupported config_set type %u, skipping",
+				config_set->config_set_type);
+			continue;
+		}
+
+		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
+		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
+			ret = btintel_pcie_get_mac_access(data);
+			if (ret) {
+				BT_WARN("YoYo: MAC access failed for config set (%d), skipping",
+					ret);
+				/* get_mac_access() asserts MAC_ACCESS_REQ before it
+				 * polls, and leaves it set on timeout; drop it so the
+				 * request bit is not leaked.
+				 */
+				btintel_pcie_release_mac_access(data);
+				continue;
+			}
+		}
+
+		for (i = 0; i < config_set->num_pairs; i++) {
+			pair_addr = get_unaligned_le32(&config_set->pairs[i].address);
+
+			/* Calculate the effective address by adding the address offset */
+			if (check_add_overflow(pair_addr, config_set->addr_offset, &addr)) {
+				BT_WARN("YoYo: config set address overflow (0x%08x + 0x%08x)",
+					pair_addr, config_set->addr_offset);
+				continue;
+			}
+
+			value = get_unaligned_le32(&config_set->pairs[i].value);
+
+			switch (config_set->config_set_type) {
+			/* Direct Address Access (CSR) */
+			case BTINTEL_PCIE_CFGSET_CSR:
+				/* Validate the effective address for CSR access (Direct Address)
+				 * addr not aligned to 4 bytes or exceeds the BAR0 length
+				 */
+				if ((addr & (sizeof(u32) - 1)) ||
+				    bar0_len < sizeof(u32) ||
+				    addr > bar0_len - sizeof(u32)) {
+					BT_WARN("YoYo: bad CSR address 0x%08x for BAR0 length %llu",
+						addr, (unsigned long long)bar0_len);
+					continue;
+				}
+
+				BT_DBG("YoYo: CSR write [0x%08x] = 0x%08x", addr, value);
+				btintel_pcie_wr_reg32(data, addr, value);
+				break;
+			/* Indirect Address Access (Peripheral MAC and Device Memory) */
+			case BTINTEL_PCIE_CFGSET_PERIPH_MAC:
+			case BTINTEL_PCIE_CFGSET_DEVICE_MEM:
+				/* The config-set TLV comes from an untrusted external file;
+				 * reject null or unaligned targets.
+				 */
+				if (!addr || (addr & (sizeof(u32) - 1))) {
+					BT_WARN("YoYo: bad indirect address 0x%08x for type %u",
+						addr, config_set->config_set_type);
+					continue;
+				}
+
+				btintel_pcie_wr_reg32(data,
+						      BTINTEL_PCIE_PRPH_DEV_ADDR_REG,
+						      addr);
+				btintel_pcie_wr_reg32(data,
+						      BTINTEL_PCIE_PRPH_DEV_WR_REG,
+						      value);
+				BT_DBG("YoYo: indirect write type %u addr 0x%08x value 0x%08x",
+				       config_set->config_set_type, addr, value);
+				break;
+			default:
+				BT_WARN("YoYo: unknown config_set type %u",
+					config_set->config_set_type);
+				break;
+			}
+		}
+
+		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
+		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM)
+			btintel_pcie_release_mac_access(data);
+	}
+}
+
+static void btintel_pcie_yoyo_handle_timepoint(struct btintel_pcie_data *data,
+					       enum btintel_pcie_dbg_timepoint tp)
+{
+	if (!data || !data->yoyo.enabled)
+		return;
+
+	BT_DBG("YoYo: Handling timepoint %u", tp);
+
+	if (tp <= BTINTEL_PCIE_TP_INVALID || tp >= BTINTEL_PCIE_TP_MAX_NUM) {
+		BT_WARN("YoYo: invalid timepoint %u", tp);
+		return;
+	}
+
+	/* PRE-DUMP phase: send HCMDs and apply config sets */
+	btintel_pcie_yoyo_send_hcmds(data, tp);
+
+	btintel_pcie_apply_yoyo_config_sets(data, tp);
 }
 
 static struct scatterlist *btintel_pcie_alloc_sgtable(ssize_t size)
@@ -1615,6 +1830,9 @@ static int btintel_pcie_enable_bt(struct btintel_pcie_data *data)
 	if (data->log_mask & BTINTEL_PCIE_LOG_ALIVE_INTR)
 		BT_INFO("%s: Mac Init: Wait on Alive Interrupt",
 			btintel_pcie_dev_name(data));
+
+	/* EARLY Timepoint Handler */
+	btintel_pcie_yoyo_handle_timepoint(data, BTINTEL_PCIE_TP_EARLY);
 
 	btintel_pcie_set_reg_bits(data, BTINTEL_PCIE_CSR_FUNC_CTRL_REG,
 				  BTINTEL_PCIE_CSR_FUNC_CTRL_FUNC_INIT);
@@ -4137,6 +4355,10 @@ static int btintel_pcie_setup(struct hci_dev *hdev)
 		set_bit(BTINTEL_PCIE_HW_RFKILL_STATE_CHECK, &data->flags);
 		btintel_pcie_unmask_hw_rfkill(data);
 		btintel_delayed_hw_rfkill(data, true);
+
+		/* Once per setup, before the HCI init reset, as on Windows */
+		btintel_pcie_yoyo_handle_timepoint(data,
+						   BTINTEL_PCIE_TP_AFTER_ALIVE);
 	}
 	return err;
 }
@@ -4750,7 +4972,8 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	if (data->enable_ini) {
 		err = btintel_pcie_yoyo_load_and_parse(&data->yoyo, &pdev->dev);
 		if (err) {
-			BT_WARN("YoYo is not configured (%d)", err);
+			BT_WARN("YoYo (BDF - %s): yoyo is not configured (%d)",
+				pci_name(pdev), err);
 			btintel_pcie_yoyo_cleanup(&data->yoyo);
 		}
 	}
@@ -4833,8 +5056,6 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	btintel_pcie_synchronize_irqs(data);
 	disable_delayed_work_sync(&data->hw_rfkill_work);
 
-	btintel_pcie_yoyo_cleanup(&data->yoyo);
-
 	btintel_pcie_disable_interrupts(data);
 
 	btintel_pcie_synchronize_irqs(data);
@@ -4852,6 +5073,9 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	pci_free_irq_vectors(pdev);
 
 	btintel_pcie_release_hdev(data);
+
+	/* Cleanup YoYo debug framework */
+	btintel_pcie_yoyo_cleanup(&data->yoyo);
 
 	destroy_workqueue(data->dump_workqueue);
 	destroy_workqueue(data->workqueue);

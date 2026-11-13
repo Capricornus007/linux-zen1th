@@ -338,7 +338,8 @@ static int s3c64xx_prepare_dma(struct s3c64xx_spi_dma_data *dma,
 		return -ENOMEM;
 	}
 
-	dmaengine_desc_set_callback(desc, s3c64xx_spi_dmacb, NULL, dma);
+	desc->callback = s3c64xx_spi_dmacb;
+	desc->callback_param = dma;
 
 	dma->cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(dma->cookie);

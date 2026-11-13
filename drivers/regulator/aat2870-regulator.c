@@ -182,7 +182,18 @@ static struct platform_driver aat2870_regulator_driver = {
 	},
 	.probe	= aat2870_regulator_probe,
 };
-subsys_platform_driver(aat2870_regulator_driver);
+
+static int __init aat2870_regulator_init(void)
+{
+	return platform_driver_register(&aat2870_regulator_driver);
+}
+subsys_initcall(aat2870_regulator_init);
+
+static void __exit aat2870_regulator_exit(void)
+{
+	platform_driver_unregister(&aat2870_regulator_driver);
+}
+module_exit(aat2870_regulator_exit);
 
 MODULE_DESCRIPTION("AnalogicTech AAT2870 Regulator");
 MODULE_LICENSE("GPL");

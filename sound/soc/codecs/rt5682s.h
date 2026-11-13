@@ -1482,7 +1482,6 @@ struct rt5682s_priv {
 
 	int jack_type;
 	unsigned int irq;
-	bool suspend_irq_disabled;
 	int irq_work_delay_time;
 	int wclk_enabled;
 };

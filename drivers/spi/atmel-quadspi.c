@@ -790,7 +790,8 @@ static int atmel_qspi_dma_xfer(struct atmel_qspi *aq, struct dma_chan *chan,
 	}
 
 	reinit_completion(&aq->dma_completion);
-	dmaengine_desc_set_callback(tx, atmel_qspi_dma_callback, NULL, aq);
+	tx->callback = atmel_qspi_dma_callback;
+	tx->callback_param = aq;
 	cookie = dmaengine_submit(tx);
 	ret = dma_submit_error(cookie);
 	if (ret) {

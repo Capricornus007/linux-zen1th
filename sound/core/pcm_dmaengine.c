@@ -169,7 +169,8 @@ static int dmaengine_pcm_prepare_and_submit(struct snd_pcm_substream *substream)
 	if (!desc)
 		return -ENOMEM;
 
-	dmaengine_desc_set_callback(desc, dmaengine_pcm_dma_complete, NULL, substream);
+	desc->callback = dmaengine_pcm_dma_complete;
+	desc->callback_param = substream;
 	prtd->cookie = dmaengine_submit(desc);
 
 	return 0;

@@ -1078,7 +1078,7 @@ int uni_player_init(struct platform_device *pdev,
 		player->hw = &uni_player_pcm_hw;
 
 	/* Get uniperif resource */
-	player->clk = devm_clk_get(&pdev->dev, NULL);
+	player->clk = of_clk_get(pdev->dev.of_node, 0);
 	if (IS_ERR(player->clk)) {
 		dev_err(player->dev, "Failed to get clock\n");
 		return PTR_ERR(player->clk);

@@ -267,7 +267,8 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	 * The last descriptor must have this callback,
 	 * to finish the DMA transaction.
 	 */
-	dmaengine_desc_set_callback(desc, mxs_ssp_dma_irq_callback, NULL, spi);
+	desc->callback = mxs_ssp_dma_irq_callback;
+	desc->callback_param = spi;
 
 	/* Start the transfer. */
 	dmaengine_submit(desc);

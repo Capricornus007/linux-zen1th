@@ -97,20 +97,11 @@ static const struct regmap_config sgm3804_regmap_config = {
 
 static int sgm3804_sync_regcache_state(struct sgm3804_data *ctx)
 {
-	int pos, neg;
-
 	guard(mutex)(&ctx->lock);
 
-	pos = gpiod_get_value_cansleep(ctx->gpios[SGM3804_POS_RAIL]);
-	if (pos < 0)
-		return pos;
-
-	neg = gpiod_get_value_cansleep(ctx->gpios[SGM3804_NEG_RAIL]);
-	if (neg < 0)
-		return neg;
-
 	/* If both GPIOs are down, IC is powered down and I2C writes will fail */
-	if (!pos && !neg) {
+	if (!gpiod_get_value_cansleep(ctx->gpios[SGM3804_POS_RAIL]) &&
+	    !gpiod_get_value_cansleep(ctx->gpios[SGM3804_NEG_RAIL])) {
 		regcache_cache_only(ctx->regmap, true);
 		regcache_mark_dirty(ctx->regmap);
 	} else {
@@ -244,9 +235,7 @@ static int sgm3804_probe(struct i2c_client *i2c)
 	if (!ctx)
 		return -ENOMEM;
 
-	ret = devm_mutex_init(dev, &ctx->lock);
-	if (ret)
-		return ret;
+	mutex_init(&ctx->lock);
 
 	ctx->regmap = devm_regmap_init_i2c(i2c, &sgm3804_regmap_config);
 	if (IS_ERR(ctx->regmap))

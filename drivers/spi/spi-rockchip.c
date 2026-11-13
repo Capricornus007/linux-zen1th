@@ -475,7 +475,8 @@ static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 		if (!rxdesc)
 			return -EINVAL;
 
-		dmaengine_desc_set_callback(rxdesc, rockchip_spi_dma_rxcb, NULL, ctlr);
+		rxdesc->callback = rockchip_spi_dma_rxcb;
+		rxdesc->callback_param = ctlr;
 	}
 
 	txdesc = NULL;
@@ -499,7 +500,8 @@ static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 			return -EINVAL;
 		}
 
-		dmaengine_desc_set_callback(txdesc, rockchip_spi_dma_txcb, NULL, ctlr);
+		txdesc->callback = rockchip_spi_dma_txcb;
+		txdesc->callback_param = ctlr;
 	}
 
 	/* rx must be started before tx due to spi instinct */

@@ -361,7 +361,18 @@ static struct platform_driver imx_audmux_driver = {
 		.of_match_table = imx_audmux_dt_ids,
 	}
 };
-subsys_platform_driver(imx_audmux_driver);
+
+static int __init imx_audmux_init(void)
+{
+	return platform_driver_register(&imx_audmux_driver);
+}
+subsys_initcall(imx_audmux_init);
+
+static void __exit imx_audmux_exit(void)
+{
+	platform_driver_unregister(&imx_audmux_driver);
+}
+module_exit(imx_audmux_exit);
 
 MODULE_DESCRIPTION("Freescale i.MX AUDMUX driver");
 MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");

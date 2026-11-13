@@ -261,7 +261,7 @@ static unsigned tegra_slink_calculate_curr_xfer_param(
 	unsigned total_fifo_words;
 
 	bits_per_word = t->bits_per_word;
-	tspi->bytes_per_word = spi_bpw_to_bytes(bits_per_word);
+	tspi->bytes_per_word = DIV_ROUND_UP(bits_per_word, 8);
 
 	if (bits_per_word == 8 || bits_per_word == 16) {
 		tspi->is_packed = true;
@@ -440,7 +440,8 @@ static int tegra_slink_start_tx_dma(struct tegra_slink_data *tspi, int len)
 		return -EIO;
 	}
 
-	dmaengine_desc_set_callback(tspi->tx_dma_desc, tegra_slink_dma_complete, NULL, &tspi->tx_dma_complete);
+	tspi->tx_dma_desc->callback = tegra_slink_dma_complete;
+	tspi->tx_dma_desc->callback_param = &tspi->tx_dma_complete;
 
 	dmaengine_submit(tspi->tx_dma_desc);
 	dma_async_issue_pending(tspi->tx_dma_chan);
@@ -458,7 +459,8 @@ static int tegra_slink_start_rx_dma(struct tegra_slink_data *tspi, int len)
 		return -EIO;
 	}
 
-	dmaengine_desc_set_callback(tspi->rx_dma_desc, tegra_slink_dma_complete, NULL, &tspi->rx_dma_complete);
+	tspi->rx_dma_desc->callback = tegra_slink_dma_complete;
+	tspi->rx_dma_desc->callback_param = &tspi->rx_dma_complete;
 
 	dmaengine_submit(tspi->rx_dma_desc);
 	dma_async_issue_pending(tspi->rx_dma_chan);

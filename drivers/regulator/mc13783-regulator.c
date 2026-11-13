@@ -457,7 +457,18 @@ static struct platform_driver mc13783_regulator_driver = {
 	},
 	.probe		= mc13783_regulator_probe,
 };
-subsys_platform_driver(mc13783_regulator_driver);
+
+static int __init mc13783_regulator_init(void)
+{
+	return platform_driver_register(&mc13783_regulator_driver);
+}
+subsys_initcall(mc13783_regulator_init);
+
+static void __exit mc13783_regulator_exit(void)
+{
+	platform_driver_unregister(&mc13783_regulator_driver);
+}
+module_exit(mc13783_regulator_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");

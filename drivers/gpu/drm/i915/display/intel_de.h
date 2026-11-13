@@ -7,15 +7,24 @@
 #define __INTEL_DE_H__
 
 #include "intel_display_core.h"
-#include "intel_dmc_wl.h"
 #include "intel_dsb.h"
 #include "intel_uncore.h"
 #include "intel_uncore_trace.h"
 
+struct intel_mmio_funcs {
+	u32 (*read)(struct intel_display *display, intel_reg_t reg);
+	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
+	bool (*check_for_unclaimed_mmio)(struct intel_display *display);
+};
+
 static inline struct intel_uncore *__to_uncore(struct intel_display *display)
 {
-	return to_intel_uncore(display->drm);
+	return display->mmio.uncore;
 }
+
+void intel_de_init(struct intel_display *display);
+bool intel_de_unclaimed_mmio_detected(struct intel_display *display);
+bool intel_de_arm_unclaimed_mmio_detection(struct intel_display *display);
 
 u8 intel_de_read8(struct intel_display *display, intel_reg_t reg);
 void intel_de_write8(struct intel_display *display, intel_reg_t reg, u8 val);
@@ -24,15 +33,7 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg);
 static inline u32
 intel_de_read(struct intel_display *display, intel_reg_t reg)
 {
-	u32 val;
-
-	intel_dmc_wl_get(display, reg);
-
-	val = intel_uncore_read(__to_uncore(display), reg);
-
-	intel_dmc_wl_put(display, reg);
-
-	return val;
+	return display->mmio.funcs->read(display, reg);
 }
 
 static inline u64
@@ -56,11 +57,7 @@ intel_de_posting_read(struct intel_display *display, intel_reg_t reg)
 static inline void
 intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val)
 {
-	intel_dmc_wl_get(display, reg);
-
-	intel_uncore_write(__to_uncore(display), reg, val);
-
-	intel_dmc_wl_put(display, reg);
+	display->mmio.funcs->write(display, reg, val);
 }
 
 static inline u32
