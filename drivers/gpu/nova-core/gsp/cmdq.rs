@@ -84,7 +84,12 @@ trait CommandElement {
 }
 
 /// Number of GSP pages making the [`Msgq`].
-pub(crate) const MSGQ_NUM_PAGES: u32 = 0x3f;
+pub(crate) const MSGQ_NUM_PAGES: u32 = 64;
+
+// The queue pointers are wrapping `u32` counters, and the slot is
+// `counter % MSGQ_NUM_PAGES`. For slots to remain contiguous when a counter
+// wraps, `MSGQ_NUM_PAGES` must divide `1 << 32`.
+static_assert!((1u64 << u32::BITS) % cv!(MSGQ_NUM_PAGES => u64) == 0);
 
 /// Circular buffer of a [`Msgq`].
 ///
@@ -578,7 +583,7 @@ impl CmdqInner<'_> {
 
         // All set - update the write pointer and inform the GSP of the new command.
         let elem_count = dst.header.element_count();
-        self.seq += 1;
+        self.seq = self.seq.wrapping_add(1);
         self.gsp_mem.advance_cpu_write_ptr(elem_count);
 
         Ok(seq)

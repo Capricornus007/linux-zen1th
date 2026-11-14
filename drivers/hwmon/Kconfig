@@ -585,16 +585,6 @@ config SENSORS_DRIVETEMP
 	  This driver can also be built as a module. If so, the module
 	  will be called drivetemp.
 
-config SENSORS_DS620
-	tristate "Dallas Semiconductor DS620"
-	depends on I2C
-	help
-	  If you say yes here you get support for Dallas Semiconductor
-	  DS620 sensor chip.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called ds620.
-
 config SENSORS_DS1621
 	tristate "Dallas Semiconductor DS1621 and compatibles"
 	depends on I2C
@@ -712,16 +702,6 @@ config SENSORS_F71882FG
 
 	  This driver can also be built as a module. If so, the module
 	  will be called f71882fg.
-
-config SENSORS_F75375S
-	tristate "Fintek F75375S/SP, F75373 and F75387"
-	depends on I2C
-	help
-	  If you say yes here you get support for hardware monitoring
-	  features of the Fintek F75375S/SP, F75373 and F75387
-
-	  This driver can also be built as a module. If so, the module
-	  will be called f75375s.
 
 config SENSORS_GSC
 	tristate "Gateworks System Controller ADC"
@@ -1354,15 +1334,6 @@ config SENSORS_MAX1668
 
 	  This driver can also be built as a module. If so, the module
 	  will be called max1668.
-
-config SENSORS_MAX197
-	tristate "Maxim MAX197 and compatibles"
-	help
-	  Support for the Maxim MAX197 A/D converter.
-	  Support will include, but not be limited to, MAX197, and MAX199.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called max197.
 
 config SENSORS_MAX31722
 	tristate "MAX31722 temperature sensor"

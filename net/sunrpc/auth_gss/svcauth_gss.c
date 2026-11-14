@@ -965,6 +965,7 @@ svcauth_gss_unwrap_priv(struct svc_rqst *rqstp, u32 seq, struct gss_ctx *ctx)
 	 */
 	xdr_init_decode(xdr, buf, buf->head[0].iov_base + offset, NULL);
 	xdr_set_scratch_folio(xdr, rqstp->rq_scratch_folio);
+	xdr->xdrgen_ctx = rqstp;
 
 out_seq:
 	/* gss_unwrap() decrypted the sequence number. */

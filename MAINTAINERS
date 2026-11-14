@@ -1518,6 +1518,22 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/iio/light/ams,as7343.yaml
 F:	drivers/iio/light/as7343.c
 
+AMS MIRA016 DRIVER
+M:	Jacopo Mondi <jacopo.mondi@ideasonboard.com>
+M:	Philippe Baetens <philippebaetens@gmail.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/ams,mira016.yaml
+F:	drivers/media/i2c/mira016.c
+
+AMS MIRA220 DRIVER
+M:	Jacopo Mondi <jacopo.mondi@ideasonboard.com>
+M:	Philippe Baetens <philippebaetens@gmail.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/ams,mira220.yaml
+F:	drivers/media/i2c/mira220.c
+
 AMT (Automatic Multicast Tunneling)
 M:	Taehee Yoo <ap420073@gmail.com>
 L:	netdev@vger.kernel.org
@@ -9444,7 +9460,7 @@ F:	include/drm/ttm/
 GPU BUDDY ALLOCATOR
 M:	Matthew Auld <matthew.auld@intel.com>
 M:	Arun Pravin <arunpravin.paneerselvam@amd.com>
-R:	Joel Fernandes <joelagnelf@nvidia.com>
+R:	Joel Fernandes <jfern@kernel.org>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
@@ -10468,13 +10484,6 @@ S:	Maintained
 F:	fs/backing-file.c
 F:	include/linux/backing-file.h
 
-FINTEK F75375S HARDWARE MONITOR AND FAN CONTROLLER DRIVER
-M:	Riku Voipio <riku.voipio@iki.fi>
-L:	linux-hwmon@vger.kernel.org
-S:	Maintained
-F:	drivers/hwmon/f75375s.c
-F:	include/linux/f75375s.h
-
 FINTEK F81604 USB to 2xCANBUS DEVICE DRIVER
 M:	Ji-Ze Hong (Peter Hong) <peter_hong@fintek.com.tw>
 L:	linux-can@vger.kernel.org
@@ -11236,7 +11245,6 @@ F:	Documentation/hwmon/gsc-hwmon.rst
 F:	drivers/hwmon/gsc-hwmon.c
 F:	drivers/mfd/gateworks-gsc.c
 F:	include/linux/mfd/gsc.h
-F:	include/linux/platform_data/gsc_hwmon.h
 
 GCC PLUGINS
 M:	Kees Cook <kees@kernel.org>
@@ -13627,7 +13635,7 @@ F:	drivers/staging/media/ipu3/
 
 INTEL IPU6 INPUT SYSTEM DRIVER
 M:	Sakari Ailus <sakari.ailus@linux.intel.com>
-R:	Antti Laakso <antti.laakso@linux.intel.com>
+M:	Antti Laakso <antti.laakso@linux.intel.com>
 R:	"Sapre, Sarang" <sarang.sapre@intel.com>
 R:	Divyamani Tripathi <divyamani.tripathi@intel.com>
 R:	Manik Bajpai <manik.bajpai@intel.com>
@@ -15554,7 +15562,7 @@ M:	Luc Maranget <luc.maranget@inria.fr>
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 R:	Akira Yokosawa <akiyks@gmail.com>
 R:	Daniel Lustig <dlustig@nvidia.com>
-R:	Joel Fernandes <joelagnelf@nvidia.com>
+R:	Joel Fernandes <jfern@kernel.org>
 L:	linux-kernel@vger.kernel.org
 L:	linux-arch@vger.kernel.org
 L:	lkmm@lists.linux.dev
@@ -23689,7 +23697,7 @@ READ-COPY UPDATE (RCU)
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 M:	Frederic Weisbecker <frederic@kernel.org> (kernel/rcu/tree_nocb.h)
 M:	Neeraj Upadhyay <neeraj.upadhyay@kernel.org> (kernel/rcu/tasks.h)
-M:	Joel Fernandes <joelagnelf@nvidia.com>
+M:	Joel Fernandes <jfern@kernel.org>
 M:	Josh Triplett <josh@joshtriplett.org>
 M:	Boqun Feng <boqun@kernel.org>
 M:	Uladzislau Rezki <urezki@gmail.com>
@@ -23697,6 +23705,7 @@ R:	Steven Rostedt <rostedt@goodmis.org>
 R:	Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
 R:	Lai Jiangshan <jiangshanlai@gmail.com>
 R:	Zqiang <qiang.zhang@linux.dev>
+R:	Puranjay Mohan <puranjay@kernel.org>
 L:	rcu@vger.kernel.org
 S:	Supported
 W:	http://www.rdrop.com/users/paulmck/RCU/
@@ -24441,6 +24450,14 @@ F:	include/dt-bindings/power/thead,th1520-power.h
 F:	include/dt-bindings/reset/thead,th1520-reset.h
 F:	include/linux/firmware/thead/thead,th1520-aon.h
 
+RISC-V ULTRARISC SoC SUPPORT
+M:	Xincheng Ji <jixincheng@ultrarisc.com>
+L:	linux-riscv@lists.infradead.org
+S:	Supported
+T:	git https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux.git/
+F:	Documentation/devicetree/bindings/riscv/ultrarisc.yaml
+F:	arch/riscv/boot/dts/ultrarisc/
+
 RNBD BLOCK DRIVERS
 M:	Md. Haris Iqbal <haris.iqbal@ionos.com>
 M:	Jack Wang <jinpu.wang@ionos.com>
@@ -24808,7 +24825,7 @@ F:	rust/kernel/generated_arch_reachable_asm.rs.S
 F:	rust/kernel/generated_arch_warn_asm.rs.S
 
 RUST [INTEROP]
-M:	Joel Fernandes <joelagnelf@nvidia.com>
+M:	Joel Fernandes <jfern@kernel.org>
 M:	Alexandre Courbot <acourbot@nvidia.com>
 L:	rust-for-linux@vger.kernel.org
 S:	Maintained
@@ -26388,6 +26405,12 @@ L:	linux-media@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/media/i2c/sony,imx678.yaml
 F:	drivers/media/i2c/imx678.c
+
+SONY IMX908 SENSOR DRIVER
+M:	Lachlan Michael <lachlan.michael@sony.com>
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx908.yaml
+F:	drivers/media/i2c/imx908.c
 
 SONY MEMORYSTICK SUBSYSTEM
 M:	Maxim Levitsky <maximlevitsky@gmail.com>
@@ -28511,7 +28534,7 @@ TORTURE-TEST MODULES
 M:	Davidlohr Bueso <dave@stgolabs.net>
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 M:	Josh Triplett <josh@joshtriplett.org>
-M:	Joel Fernandes <joelagnelf@nvidia.com>
+M:	Joel Fernandes <jfern@kernel.org>
 L:	linux-kernel@vger.kernel.org
 S:	Supported
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rcu/linux.git rcu/dev

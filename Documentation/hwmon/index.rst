@@ -72,7 +72,6 @@ Hardware Monitoring Kernel Drivers
    dps920ab
    drivetemp
    ds1621
-   ds620
    e50sn12051
    emc1403
    emc1812
@@ -169,7 +168,6 @@ Hardware Monitoring Kernel Drivers
    max16601
    max1668
    max17616
-   max197
    max20730
    max20751
    max20826

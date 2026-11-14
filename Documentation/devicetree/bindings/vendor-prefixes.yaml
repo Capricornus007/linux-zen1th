@@ -1537,6 +1537,8 @@ patternProperties:
     description: Sharp Corporation
   "^shenchao,.*":
     description: Shen Chao Optoelectronics (Shenzhen) Co., Ltd.
+  "^shenrongda,.*":
+    description: Shenzhen Rongda Computer Co., Ltd.
   "^shift,.*":
     description: SHIFT GmbH
   "^shimafuji,.*":
