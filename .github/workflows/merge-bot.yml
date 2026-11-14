@@ -23,6 +23,14 @@ jobs:
           git config --global advice.detachedHead false
           GITURL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           NEXTURL="https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git"
+          STABLEURL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+          # 2026-11-14：GitHub-hosted runner（Azure）到 git.kernel.org:443 整個連不上，
+          # run #34 的 attempt 1 與 attempt 2 都是 3 次 ×136 秒 TCP timeout（不是 502，
+          # 重試同網域永遠救不了）。kernel.googlesource.com 是同一棵 upstream tree 的
+          # Google 鏡像，本機實測 HEAD 與 kernel.org 完全一致（84abb955b1…），
+          # linux-7.3.y 分支也在。主源仍用 kernel.org，只在三次全敗時才切鏡像。
+          NEXTURL_MIRROR="https://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next"
+          STABLEURL_MIRROR="https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux"
           cd meta
           # （旧的「增量：整合分支←next 尖端」路徑已刪除——zen1th 現在是無上游歷史的
           #   單提交快照分支，沒有共同祖先可 merge；且全量重組只要 ~10 分鐘，每日全量。）
@@ -33,7 +41,7 @@ jobs:
           git remote add zen    https://github.com/zen-kernel/zen-kernel.git
           git remote add xanmod https://gitlab.com/xanmod/linux.git
           git remote add lin    https://github.com/torvalds/linux.git
-          git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+          git remote add stable "$STABLEURL"
           # kernel.org 的 git HTTP 後端間歇 502（11/11 的 merge-bot 就死在 fetch next）——
           # 對 kernel.org 的兩條 fetch 加 3 次重試；全失敗才紅，不再一次 502 就收工。
           # sleep 只在 CI runner 裡跑，不阻塞本機。
@@ -41,15 +49,26 @@ jobs:
             local t
             for t in 1 2 3; do
               if git fetch "$@"; then return 0; fi
-              echo "::warning::git fetch $* 第 $t 次失敗（kernel.org 常見 502），重試"
+              echo "::warning::git fetch $* 第 $t 次失敗，重試"
               [ "$t" = 3 ] || sleep 20
             done
             echo "::error::git fetch $* 三次全失敗"
             return 1
           }
-          fetch_retry --filter=blob:none -q next   master:refs/remotes/next/master || exit 1
+          # remote 名 + 鏡像 URL + git fetch 參數；主源全敗才把 remote URL 換成鏡像，
+          # 避免把「連不上」誤判成上游沒有這個分支。鏡像是同一棵 tree，不引入分叉。
+          fetch_with_mirror() {
+            local r="$1" m="$2"; shift 2
+            if fetch_retry "$@"; then return 0; fi
+            echo "::warning::$r 主源三次全敗，切到 kernel.googlesource 鏡像"
+            git remote set-url "$r" "$m"
+            if fetch_retry "$@"; then return 0; fi
+            echo "::error::$r 主源與鏡像都失敗"
+            return 1
+          }
+          fetch_with_mirror next   "$NEXTURL_MIRROR"   --filter=blob:none -q next   master:refs/remotes/next/master || exit 1
           git fetch --filter=blob:none -q lin     master:refs/remotes/lin/master
-          fetch_retry --filter=blob:none -q stable linux-7.3.y:refs/remotes/stable/linux-7.3.y || exit 1
+          fetch_with_mirror stable "$STABLEURL_MIRROR" --filter=blob:none -q stable linux-7.3.y:refs/remotes/stable/linux-7.3.y || exit 1
           git fetch -q zen    master:refs/remotes/zen/master
           git fetch -q xanmod 7.3:refs/remotes/xanmod/7.3
           git checkout -q -b zen1th next/master
