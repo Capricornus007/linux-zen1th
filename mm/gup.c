@@ -74,12 +74,14 @@ static inline void sanity_check_pinned_pages(struct page **pages,
 static inline struct folio *try_get_folio(struct page *page, int refs)
 {
 	struct folio *folio;
+	int ref_count;
 
 retry:
 	folio = page_folio(page);
-	if (WARN_ON_ONCE(folio_ref_count(folio) < 0))
+	ref_count = folio_ref_count(folio);
+	if (WARN_ON_ONCE(ref_count < 0))
 		return NULL;
-	if (unlikely(folio_ref_count_over_limit(folio)))
+	if (unlikely(__folio_ref_count_over_limit(folio, ref_count)))
 		return NULL;
 	if (unlikely(!folio_ref_try_add(folio, refs)))
 		return NULL;
@@ -142,11 +144,13 @@ static void gup_put_folio(struct folio *folio, int refs, unsigned int flags)
 int __must_check try_grab_folio(struct folio *folio, int refs,
 				unsigned int flags)
 {
-	if (WARN_ON_ONCE(folio_ref_count(folio) <= 0))
+	const int ref_count = folio_ref_count(folio);
+
+	if (WARN_ON_ONCE(ref_count <= 0))
 		return -ENOMEM;
 
 	if ((flags & (FOLL_GET | FOLL_PIN)) &&
-	    unlikely(folio_ref_count_over_limit(folio)))
+	    unlikely(__folio_ref_count_over_limit(folio, ref_count)))
 		return -ENOMEM;
 
 	if (unlikely(!(flags & FOLL_PCI_P2PDMA) && folio_is_pci_p2pdma(folio)))

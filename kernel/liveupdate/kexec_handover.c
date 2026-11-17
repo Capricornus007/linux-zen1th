@@ -709,16 +709,22 @@ static int __init kho_parse_bootmem_size(char *p)
 	if (p[len - 1] == '%') {
 		/* unsigned int max is 4,294,967,295, 10 chars */
 		char s_scale[11] = {};
+		unsigned int scale;
 		int ret = 0;
 
 		if (len > ARRAY_SIZE(s_scale))
 			return -EINVAL;
 
 		memcpy(s_scale, p, len - 1);
-		ret = kstrtouint(s_scale, 10, &bootmem_scale);
-		if (!ret)
-			pr_notice("bootmem scale is %d%%\n", bootmem_scale);
-		return ret;
+		ret = kstrtouint(s_scale, 10, &scale);
+		if (ret)
+			return ret;
+		if (!scale)
+			return -EINVAL;
+
+		bootmem_scale = scale;
+		pr_notice("bootmem scale is %d%%\n", bootmem_scale);
+		return 0;
 	}
 
 	/* parse ll[KMG],mm[KMG],nn[KMG] */
@@ -858,7 +864,7 @@ static int __init kho_reserve_bootmem_area(phys_addr_t size, phys_addr_t end,
 		return 0;
 
 	addr = memblock_alloc_range_nid(size, BOOTMEM_ALIGNMENT_BYTES, 0, end,
-					nid, true);
+					nid, numa_valid_node(nid));
 	if (!addr)
 		return -ENOMEM;
 
@@ -932,7 +938,7 @@ static void __init kho_reserve_bootmem(void)
 	return;
 
 err_free_bootmem_areas:
-	for (int i = kho_bootmem_cnt - 1; i >= 0; i--)
+	for (int i = 0; i < kho_bootmem_cnt; i++)
 		memblock_phys_free(kho_bootmem[i].addr, kho_bootmem[i].size);
 	kho_bootmem_cnt = 0;
 err_free_bootmem_desc:

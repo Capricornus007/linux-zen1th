@@ -380,9 +380,6 @@ static int alloc_cluster_groups(unsigned int ncpus,
 	const struct cpumask **clusters;
 	struct node_groups *cluster_groups;
 
-	if (!cluster_snapshot)
-		goto no_cluster;
-
 	cpumask_copy(msk, node_cpumask);
 
 	/* Probe how many clusters in this node. */
@@ -453,6 +450,9 @@ static int __try_group_cluster_cpus(unsigned int ncpus,
 	int ncluster;
 	cpumask_var_t nmsk;
 	unsigned int i, nc;
+
+	if (!cluster_snapshot)
+		return 0;
 
 	if (!zalloc_cpumask_var(&nmsk, GFP_KERNEL))
 		return -ENOMEM;

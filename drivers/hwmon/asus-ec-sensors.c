@@ -234,6 +234,7 @@ enum board_family {
 	family_intel_200_series,
 	family_intel_300_series,
 	family_intel_400_series,
+	family_intel_500_series,
 	family_intel_600_series,
 	family_intel_700_series
 };
@@ -431,6 +432,15 @@ static const struct ec_sensor_info sensors_family_intel_400[] = {
 	[ec_sensor_fan_cpu_opt] =
 		EC_SENSOR("CPU_Opt", hwmon_fan, 2, 0x00, 0xb0),
 	[ec_sensor_fan_vrm_hs] = EC_SENSOR("VRM HS", hwmon_fan, 2, 0x00, 0xb2),
+};
+
+static const struct ec_sensor_info sensors_family_intel_500[] = {
+	[ec_sensor_temp_mb] =
+		EC_SENSOR("Motherboard", hwmon_temp, 1, 0x00, 0x3c),
+	[ec_sensor_temp_t_sensor] =
+		EC_SENSOR("T_Sensor", hwmon_temp, 1, 0x00, 0x3d),
+	[ec_sensor_temp_vrm] = EC_SENSOR("VRM", hwmon_temp, 1, 0x00, 0x3e),
+	[ec_sensor_curr_cpu] = EC_SENSOR("CPU_Current", hwmon_curr, 1, 0x00, 0xf4),
 };
 
 static const struct ec_sensor_info sensors_family_intel_600[] = {
@@ -636,6 +646,13 @@ static const struct ec_board_info board_info_prime_z270_a = {
 	.family = family_intel_200_series,
 };
 
+static const struct ec_board_info board_info_prime_z590_a = {
+	.sensors = SENSOR_TEMP_MB | SENSOR_TEMP_T_SENSOR | SENSOR_TEMP_VRM |
+		SENSOR_CURR_CPU,
+	.mutex_path = ASUS_HW_ACCESS_MUTEX_RMTW_ASMX,
+	.family = family_intel_500_series,
+};
+
 static const struct ec_board_info board_info_pro_art_b550_creator = {
 	.sensors = SENSOR_SET_TEMP_CHIPSET_CPU_MB |
 		SENSOR_TEMP_T_SENSOR |
@@ -805,6 +822,14 @@ static const struct ec_board_info board_info_strix_x670e_e_gaming_wifi = {
 	.family = family_amd_600_series,
 };
 
+static const struct ec_board_info board_info_strix_x670e_f_gaming_wifi = {
+	.sensors = SENSOR_TEMP_CPU | SENSOR_TEMP_CPU_PACKAGE |
+		SENSOR_TEMP_MB | SENSOR_TEMP_VRM |
+		SENSOR_TEMP_T_SENSOR,
+	.mutex_path = ASUS_HW_ACCESS_MUTEX_SB_PCI0_SBRG_SIO1_MUT0,
+	.family = family_amd_600_series,
+};
+
 static const struct ec_board_info board_info_strix_x670e_i_gaming_wifi = {
 	.sensors = SENSOR_TEMP_CPU | SENSOR_TEMP_CPU_PACKAGE |
 			SENSOR_TEMP_MB | SENSOR_TEMP_VRM,
@@ -938,6 +963,8 @@ static const struct dmi_system_id dmi_table[] = {
 					&board_info_prime_x670e_pro_wifi),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("PRIME Z270-A",
 					&board_info_prime_z270_a),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("PRIME Z590-A",
+					&board_info_prime_z590_a),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ProArt B550-CREATOR",
 					&board_info_pro_art_b550_creator),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ProArt X570-CREATOR WIFI",
@@ -972,6 +999,8 @@ static const struct dmi_system_id dmi_table[] = {
 					&board_info_crosshair_x670e_gene),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR X670E HERO",
 					&board_info_crosshair_x670e_hero),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR X870E DARK HERO",
+					&board_info_crosshair_x870e_hero),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR X870E HERO",
 					&board_info_crosshair_x870e_hero),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG MAXIMUS XI HERO",
@@ -1014,6 +1043,8 @@ static const struct dmi_system_id dmi_table[] = {
 					&board_info_strix_x670e_e_gaming_wifi),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X670E-E GAMING WIFI",
 					&board_info_strix_x670e_e_gaming_wifi),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X670E-F GAMING WIFI",
+					&board_info_strix_x670e_f_gaming_wifi),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X670E-I GAMING WIFI",
 					&board_info_strix_x670e_i_gaming_wifi),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X870-F GAMING WIFI",
@@ -1585,6 +1616,9 @@ static int asus_ec_probe(struct platform_device *pdev)
 		break;
 	case family_intel_400_series:
 		ec_data->sensors_info = sensors_family_intel_400;
+		break;
+	case family_intel_500_series:
+		ec_data->sensors_info = sensors_family_intel_500;
 		break;
 	case family_intel_600_series:
 		ec_data->sensors_info = sensors_family_intel_600;

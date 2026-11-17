@@ -1248,6 +1248,12 @@ static int dell_smm_init_data(struct device *dev, const struct dell_smm_ops *ops
 		return -EINVAL;
 	}
 	data->i8k_fan_max = fan_max ? : I8K_FAN_HIGH;
+	/* The BIOS takes the fan state in a single byte */
+	if (data->i8k_fan_max > U8_MAX) {
+		dev_err(dev, "maximum fan state %u is too large (max %u)\n",
+			data->i8k_fan_max, U8_MAX);
+		return -EINVAL;
+	}
 	data->i8k_pwm_mult = DIV_ROUND_UP(255, data->i8k_fan_max);
 
 	return 0;
@@ -1692,6 +1698,14 @@ static const struct dmi_system_id i8k_whitelist_fan_control[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
 			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Dell 16 DC16250"),
+		},
+		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
+	},
+	{
+		.ident = "Dell Pro Precision 7 16 PW716260",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Dell Pro Precision 7 16 PW716260"),
 		},
 		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
 	},

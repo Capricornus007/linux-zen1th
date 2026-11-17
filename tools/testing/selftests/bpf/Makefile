@@ -33,14 +33,13 @@ TEST_GEN_PROGS += test_progs-cpuv4
 TEST_INST_SUBDIRS += cpuv4
 endif
 
-TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)	\
+TEST_FILES = $(wildcard progs/btf_dump_test_case_*.c)	\
 	     bpftool_btf_dump_sorted.expected					\
 	     bpftool_btf_dump_unsorted.expected
 
 # Order correspond to 'make run_tests' order
 TEST_PROGS := test_bpftool_build.sh \
 	test_doc_build.sh \
-	test_xsk.sh \
 	test_xdp_features.sh
 
 TEST_PROGS_EXTENDED := \
@@ -57,9 +56,7 @@ TEST_GEN_PROGS_EXTENDED = \
 	test_cpp \
 	veristat \
 	xdp_features \
-	xdp_hw_metadata \
-	xdp_synproxy \
-	xskxceiver
+	xdp_synproxy
 
 TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
 
@@ -257,9 +254,9 @@ $(RUNNER_OBJS): $(VERIFY_SIG_HDR) $(BPFOBJ) $(TRUNNER_BPFTOOL)
 $(OUTPUT)/test_progs.o: prog_tests/tests.h
 $(OUTPUT)/test_maps.o: map_tests/tests.h
 
-# find_bit.c is the only runner source outside this directory, so it
-# needs a rule of its own.
-$(OUTPUT)/find_bit.o: $(TOOLSDIR)/lib/find_bit.c
+# xsk.c is the only runner source outside this directory, so it needs a
+# rule of its own.
+$(OUTPUT)/xsk.o: ../net/lib/xsk/xsk.c
 	$(call msg,CC,,$@)
 	$(Q)$(CC) $(CFLAGS) -c $< $(LDLIBS) -o $@
 
@@ -570,22 +567,6 @@ $(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 
-# Keep xskxceiver independent from test_progs object dependencies.
-$(OUTPUT)/xskxceiver: xskxceiver.c xsk.c network_helpers.c \
-			   $(TOOLSDIR)/lib/find_bit.c prog_tests/test_xsk.c \
-			   xskxceiver.h xsk.h network_helpers.h \
-			   prog_tests/test_xsk.h test_progs.h bpf_util.h \
-			   $(OUTPUT)/xsk_xdp_progs.skel.h $(BPFOBJ) | $(OUTPUT)
-	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
-
-$(OUTPUT)/xdp_hw_metadata: xdp_hw_metadata.c xsk.c network_helpers.c \
-			   $(TOOLSDIR)/lib/find_bit.c xdp_metadata.h \
-			   xsk.h network_helpers.h test_progs.h bpf_util.h \
-			   $(OUTPUT)/xdp_hw_metadata.skel.h $(BPFOBJ) | $(OUTPUT)
-	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
-
 $(OUTPUT)/xdp_features: xdp_features.c network_helpers.c xdp_features.h \
 			   network_helpers.h \
 			   test_progs.h bpf_util.h $(OUTPUT)/xdp_features.skel.h \
@@ -650,7 +631,9 @@ $(OUTPUT)/veristat: $(OUTPUT)/veristat.o
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
 
 # Linking uprobe_multi can fail due to relocation overflows on mips.
-$(OUTPUT)/uprobe_multi: CFLAGS += $(if $(filter mips, $(ARCH)),-mxgot)
+# s390's user unwinder follows backchains, keep them for the build_id test.
+$(OUTPUT)/uprobe_multi: CFLAGS += $(if $(filter mips, $(ARCH)),-mxgot) \
+				$(if $(filter s390 s390x, $(ARCH)),-mbackchain)
 $(OUTPUT)/uprobe_multi: uprobe_multi.c uprobe_multi.ld
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) -Wl,-T,uprobe_multi.ld -O0 $(LDFLAGS) 	\

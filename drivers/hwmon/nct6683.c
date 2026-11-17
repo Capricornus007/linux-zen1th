@@ -31,10 +31,13 @@
 #include <linux/jiffies.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
+#include <linux/math.h>
+#include <linux/minmax.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 enum kinds { nct6683, nct6686, nct6687 };
 
@@ -187,6 +190,7 @@ superio_exit(int ioreg)
 #define NCT6687DR_REG_CURVE_MODE(x)	(0xa08 + (x))		/* channels 0-7 */
 #define NCT6687DR_REG_CURVE_MODE_SYS(x)	(0x240 + (x) - 10)	/* channels 10-15 */
 #define NCT6687DR_CURVE_MODE_PWM	0x40
+#define NCT6687DR_CURVE_TEMP_MAX	127	/* degrees Celsius */
 
 #define NCT6687DR_REG_FAN_ENGINE_STS	0xcf8
 #define NCT6687DR_FAN_ENGINE_PHASE	BIT(3)
@@ -209,6 +213,8 @@ superio_exit(int ioreg)
 #define NCT6683_CUSTOMER_ID_ASROCK5	0x1621
 #define NCT6683_CUSTOMER_ID_ASROCK6	0x1633
 #define NCT6683_CUSTOMER_ID_ASROCK7	0x163d
+#define NCT6683_CUSTOMER_ID_ASROCK8	0x164a
+#define NCT6683_CUSTOMER_ID_ASROCK9	0x165f
 
 #define NCT6683_REG_BUILD_YEAR		0x604
 #define NCT6683_REG_BUILD_MONTH		0x605
@@ -329,6 +335,12 @@ static const char *const nct6683_mon_label[] = {
 
 /* ------------------------------------------------------- */
 
+/* Fan curve of NCT6687D-R: temperatures in degrees Celsius, duty cycles */
+struct nct6687dr_curve {
+	u8 temp[NCT6687DR_CURVE_POINTS];
+	u8 pwm[NCT6687DR_CURVE_POINTS];
+};
+
 struct nct6683_data {
 	int addr;		/* IO base of EC space */
 	int sioreg;		/* SIO register */
@@ -371,6 +383,7 @@ struct nct6683_data {
 
 	u16 have_fan_ctrl;		/* channels supporting fan control */
 	u16 have_curve;			/* channels with a duty cycle curve */
+	u16 curve_writable;		/* channels with a writable curve */
 
 #ifdef CONFIG_PM
 	/* Remember extra register values over suspend/resume */
@@ -380,6 +393,10 @@ struct nct6683_data {
 	/* Manual fan control set through sysfs, restored on resume */
 	u16 pwm_manual;			/* channels set to manual mode */
 	u8 pwm_cmd[NCT6683_NUM_REG_FAN];	/* their duty cycle */
+
+	/* Fan curves set through sysfs, restored on resume */
+	u16 curve_set;
+	struct nct6687dr_curve curve[NCT6683_NUM_REG_FAN];
 };
 
 struct nct6683_sio_data {
@@ -954,6 +971,12 @@ static u16 nct6683_cmd_reg(int ch)
 	return ch < 8 ? NCT6683_REG_PWM_WRITE(ch) : NCT6687DR_REG_PWM_CMD_SYS(ch);
 }
 
+static u16 nct6687dr_curve_mode_reg(int ch)
+{
+	return ch < 8 ? NCT6687DR_REG_CURVE_MODE(ch) :
+			NCT6687DR_REG_CURVE_MODE_SYS(ch);
+}
+
 static bool nct6683_pwm_manual(struct nct6683_data *data, int ch)
 {
 	return nct6683_read(data, nct6683_mode_reg(ch)) & BIT(ch % 8);
@@ -1025,28 +1048,22 @@ static int nct6687dr_fan_cfg_finish(struct nct6683_data *data)
 }
 
 /*
- * Select manual or automatic mode for a fan channel and, if cmd is not
- * negative, set its duty cycle for manual mode.
+ * Change fan configuration registers in a configuration phase. fn() is
+ * called once per attempt, with the phase open.
  */
-static int nct6683_fan_ctrl_update(struct nct6683_data *data, int ch,
-				   bool manual, int cmd)
+static int
+nct6687dr_fan_cfg_transaction(struct nct6683_data *data,
+			      void (*fn)(struct nct6683_data *data, void *ctx),
+			      void *ctx)
 {
-	u16 mode_reg = nct6683_mode_reg(ch);
-	u16 cmd_reg = nct6683_cmd_reg(ch);
-	u8 mask = BIT(ch % 8);
 	int attempt, err;
-	u8 mode;
 
 	for (attempt = 0; attempt < 3; attempt++) {
 		err = nct6687dr_fan_cfg_start(data);
 		if (err)
 			return err;
 
-		mode = nct6683_read(data, mode_reg);
-		if (cmd >= 0)
-			nct6683_write(data, cmd_reg, cmd);
-		nct6683_write(data, mode_reg,
-			      manual ? mode | mask : mode & ~mask);
+		fn(data, ctx);
 
 		/* Retry if the configuration phase was lost or rejected */
 		err = nct6687dr_fan_cfg_finish(data);
@@ -1055,6 +1072,42 @@ static int nct6683_fan_ctrl_update(struct nct6683_data *data, int ch,
 	}
 
 	return -EIO;
+}
+
+struct nct6683_fan_ctrl {
+	int ch;
+	bool manual;
+	int cmd;
+};
+
+static void nct6683_fan_ctrl_write(struct nct6683_data *data, void *ctx)
+{
+	const struct nct6683_fan_ctrl *fc = ctx;
+	u16 mode_reg = nct6683_mode_reg(fc->ch);
+	u8 mask = BIT(fc->ch % 8);
+	u8 mode;
+
+	mode = nct6683_read(data, mode_reg);
+	if (fc->cmd >= 0)
+		nct6683_write(data, nct6683_cmd_reg(fc->ch), fc->cmd);
+	nct6683_write(data, mode_reg,
+		      fc->manual ? mode | mask : mode & ~mask);
+}
+
+/*
+ * Select manual or automatic mode for a fan channel and, if cmd is not
+ * negative, set its duty cycle for manual mode.
+ */
+static int nct6683_fan_ctrl_update(struct nct6683_data *data, int ch,
+				   bool manual, int cmd)
+{
+	struct nct6683_fan_ctrl fc = {
+		.ch = ch,
+		.manual = manual,
+		.cmd = cmd,
+	};
+
+	return nct6687dr_fan_cfg_transaction(data, nct6683_fan_ctrl_write, &fc);
 }
 
 static int nct6683_set_pwm(struct nct6683_data *data, int ch, u8 val)
@@ -1168,6 +1221,150 @@ store_pwm_enable(struct device *dev, struct device_attribute *attr,
 SENSOR_TEMPLATE(pwm_enable, "pwm%d_enable", 0444, show_pwm_enable,
 		store_pwm_enable, 0);
 
+/*
+ * Read a fan curve of NCT6687D-R. Only curves which set a duty cycle are
+ * supported: their mode register is 0x40 and the high byte of each output
+ * is zero, so that the low byte holds the duty cycle.
+ */
+static bool nct6687dr_curve_read(struct nct6683_data *data, int ch,
+				 struct nct6687dr_curve *curve)
+{
+	int p;
+
+	if (nct6683_read(data, nct6687dr_curve_mode_reg(ch)) !=
+	    NCT6687DR_CURVE_MODE_PWM)
+		return false;
+
+	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++) {
+		if (nct6683_read(data, NCT6687DR_REG_CURVE_OUT_HI(ch, p)))
+			return false;
+		curve->temp[p] = nct6683_read(data,
+					      NCT6687DR_REG_CURVE_TEMP(ch, p));
+		curve->pwm[p] = nct6683_read(data,
+					     NCT6687DR_REG_CURVE_OUT_LO(ch, p));
+	}
+
+	return true;
+}
+
+/*
+ * Only curves with non-decreasing temperatures up to the limit and
+ * non-decreasing duty cycles are written. The EC does not take a curve
+ * whose duty cycles decrease.
+ */
+static bool nct6687dr_curve_valid(const struct nct6687dr_curve *curve)
+{
+	int p;
+
+	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++) {
+		if (curve->temp[p] > NCT6687DR_CURVE_TEMP_MAX)
+			return false;
+		if (p && (curve->temp[p] < curve->temp[p - 1] ||
+			  curve->pwm[p] < curve->pwm[p - 1]))
+			return false;
+	}
+
+	return true;
+}
+
+/* Clamp a new value of point p to the values of the adjacent points */
+static u8 nct6687dr_curve_clamp(const u8 *val, int p, int v, int max)
+{
+	int lo = p ? val[p - 1] : 0;
+	int hi = p < NCT6687DR_CURVE_POINTS - 1 ? val[p + 1] : max;
+
+	return clamp(v, lo, hi);
+}
+
+struct nct6687dr_curve_ctx {
+	int ch;
+	const struct nct6687dr_curve *curve;
+};
+
+static void nct6687dr_curve_write(struct nct6683_data *data, void *ctx)
+{
+	const struct nct6687dr_curve_ctx *cc = ctx;
+	int ch = cc->ch;
+	int p;
+
+	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++)
+		nct6683_write(data, NCT6687DR_REG_CURVE_TEMP(ch, p),
+			      cc->curve->temp[p]);
+	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++) {
+		nct6683_write(data, NCT6687DR_REG_CURVE_OUT_HI(ch, p), 0);
+		nct6683_write(data, NCT6687DR_REG_CURVE_OUT_LO(ch, p),
+			      cc->curve->pwm[p]);
+	}
+	nct6683_write(data, nct6687dr_curve_mode_reg(ch),
+		      NCT6687DR_CURVE_MODE_PWM);
+}
+
+/* Write a fan curve and check that the EC has taken it */
+static int nct6687dr_curve_apply(struct nct6683_data *data, int ch,
+				 const struct nct6687dr_curve *curve)
+{
+	struct nct6687dr_curve_ctx cc = { .ch = ch, .curve = curve };
+	struct nct6687dr_curve check;
+	int err;
+
+	err = nct6687dr_fan_cfg_transaction(data, nct6687dr_curve_write, &cc);
+	if (err)
+		return err;
+
+	if (!nct6687dr_curve_read(data, ch, &check) ||
+	    memcmp(&check, curve, sizeof(check)))
+		return -EIO;
+
+	return 0;
+}
+
+/*
+ * Set the temperature (in degrees Celsius) or the duty cycle of one point
+ * of a fan curve, if not negative. The whole curve is written, and the
+ * previous one is restored if that fails while the EC responds.
+ */
+static int nct6687dr_curve_set_point(struct device *dev, int ch, int p,
+				     int temp, int pwm)
+{
+	struct nct6683_data *data = dev_get_drvdata(dev);
+	struct nct6687dr_curve old, curve;
+	int err;
+
+	mutex_lock(&data->update_lock);
+
+	/* Do not touch a curve which is no longer supported */
+	if (!nct6687dr_curve_read(data, ch, &old) ||
+	    !nct6687dr_curve_valid(&old)) {
+		err = -EIO;
+		goto unlock;
+	}
+
+	/* Keep the temperatures and the duty cycles non-decreasing */
+	curve = old;
+	if (temp >= 0)
+		curve.temp[p] = nct6687dr_curve_clamp(curve.temp, p, temp,
+						      NCT6687DR_CURVE_TEMP_MAX);
+	if (pwm >= 0)
+		curve.pwm[p] = nct6687dr_curve_clamp(curve.pwm, p, pwm, 255);
+
+	err = nct6687dr_curve_apply(data, ch, &curve);
+	if (err) {
+		/* The EC does not respond, so do not try the old curve */
+		if (err == -ETIMEDOUT)
+			goto unlock;
+		if (nct6687dr_curve_apply(data, ch, &old))
+			dev_err(dev, "Fan curve of pwm%d in unknown state\n",
+				ch + 1);
+		goto unlock;
+	}
+
+	data->curve_set |= BIT(ch);
+	data->curve[ch] = curve;
+unlock:
+	mutex_unlock(&data->update_lock);
+	return err;
+}
+
 /* Fan curves, read from the EC on each access */
 static ssize_t
 show_pwm_auto_point_temp(struct device *dev, struct device_attribute *attr,
@@ -1202,6 +1399,43 @@ show_pwm_auto_point_pwm(struct device *dev, struct device_attribute *attr,
 }
 
 static ssize_t
+store_pwm_auto_point_temp(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t count)
+{
+	struct sensor_device_attribute_2 *sattr = to_sensor_dev_attr_2(attr);
+	long val;
+	int err;
+
+	err = kstrtol(buf, 10, &val);
+	if (err)
+		return err;
+
+	val = clamp_val(val, 0, NCT6687DR_CURVE_TEMP_MAX * 1000);
+	err = nct6687dr_curve_set_point(dev, sattr->nr, sattr->index,
+					DIV_ROUND_CLOSEST(val, 1000), -1);
+
+	return err ? err : count;
+}
+
+static ssize_t
+store_pwm_auto_point_pwm(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct sensor_device_attribute_2 *sattr = to_sensor_dev_attr_2(attr);
+	unsigned long val;
+	int err;
+
+	err = kstrtoul(buf, 10, &val);
+	if (err)
+		return err;
+
+	err = nct6687dr_curve_set_point(dev, sattr->nr, sattr->index, -1,
+					min_t(unsigned long, val, 255));
+
+	return err ? err : count;
+}
+
+static ssize_t
 show_pwm_auto_channels_temp(struct device *dev, struct device_attribute *attr,
 			    char *buf)
 {
@@ -1233,34 +1467,34 @@ show_pwm_auto_channels_temp(struct device *dev, struct device_attribute *attr,
 
 SENSOR_TEMPLATE(pwm_auto_channels_temp, "pwm%d_auto_channels_temp", 0444,
 		show_pwm_auto_channels_temp, NULL, 0);
-SENSOR_TEMPLATE_2(pwm_auto_point1_temp, "pwm%d_auto_point1_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 0);
-SENSOR_TEMPLATE_2(pwm_auto_point1_pwm, "pwm%d_auto_point1_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 0);
-SENSOR_TEMPLATE_2(pwm_auto_point2_temp, "pwm%d_auto_point2_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 1);
-SENSOR_TEMPLATE_2(pwm_auto_point2_pwm, "pwm%d_auto_point2_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 1);
-SENSOR_TEMPLATE_2(pwm_auto_point3_temp, "pwm%d_auto_point3_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 2);
-SENSOR_TEMPLATE_2(pwm_auto_point3_pwm, "pwm%d_auto_point3_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 2);
-SENSOR_TEMPLATE_2(pwm_auto_point4_temp, "pwm%d_auto_point4_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 3);
-SENSOR_TEMPLATE_2(pwm_auto_point4_pwm, "pwm%d_auto_point4_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 3);
-SENSOR_TEMPLATE_2(pwm_auto_point5_temp, "pwm%d_auto_point5_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 4);
-SENSOR_TEMPLATE_2(pwm_auto_point5_pwm, "pwm%d_auto_point5_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 4);
-SENSOR_TEMPLATE_2(pwm_auto_point6_temp, "pwm%d_auto_point6_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 5);
-SENSOR_TEMPLATE_2(pwm_auto_point6_pwm, "pwm%d_auto_point6_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 5);
-SENSOR_TEMPLATE_2(pwm_auto_point7_temp, "pwm%d_auto_point7_temp", 0444,
-		  show_pwm_auto_point_temp, NULL, 0, 6);
-SENSOR_TEMPLATE_2(pwm_auto_point7_pwm, "pwm%d_auto_point7_pwm", 0444,
-		  show_pwm_auto_point_pwm, NULL, 0, 6);
+SENSOR_TEMPLATE_2(pwm_auto_point1_temp, "pwm%d_auto_point1_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 0);
+SENSOR_TEMPLATE_2(pwm_auto_point1_pwm, "pwm%d_auto_point1_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 0);
+SENSOR_TEMPLATE_2(pwm_auto_point2_temp, "pwm%d_auto_point2_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 1);
+SENSOR_TEMPLATE_2(pwm_auto_point2_pwm, "pwm%d_auto_point2_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 1);
+SENSOR_TEMPLATE_2(pwm_auto_point3_temp, "pwm%d_auto_point3_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 2);
+SENSOR_TEMPLATE_2(pwm_auto_point3_pwm, "pwm%d_auto_point3_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 2);
+SENSOR_TEMPLATE_2(pwm_auto_point4_temp, "pwm%d_auto_point4_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 3);
+SENSOR_TEMPLATE_2(pwm_auto_point4_pwm, "pwm%d_auto_point4_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 3);
+SENSOR_TEMPLATE_2(pwm_auto_point5_temp, "pwm%d_auto_point5_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 4);
+SENSOR_TEMPLATE_2(pwm_auto_point5_pwm, "pwm%d_auto_point5_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 4);
+SENSOR_TEMPLATE_2(pwm_auto_point6_temp, "pwm%d_auto_point6_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 5);
+SENSOR_TEMPLATE_2(pwm_auto_point6_pwm, "pwm%d_auto_point6_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 5);
+SENSOR_TEMPLATE_2(pwm_auto_point7_temp, "pwm%d_auto_point7_temp", 0644,
+		  show_pwm_auto_point_temp, store_pwm_auto_point_temp, 0, 6);
+SENSOR_TEMPLATE_2(pwm_auto_point7_pwm, "pwm%d_auto_point7_pwm", 0644,
+		  show_pwm_auto_point_pwm, store_pwm_auto_point_pwm, 0, 6);
 
 /* pwm, pwm_enable, pwm_auto_channels_temp and the fan curve points */
 #define NCT6683_PWM_TEMPLATES	(3 + 2 * NCT6687DR_CURVE_POINTS)
@@ -1276,8 +1510,11 @@ static umode_t nct6683_pwm_is_visible(struct kobject *kobj,
 	if (!(data->have_pwm & (1 << pwm)))
 		return 0;
 
-	if (nr >= 2)	/* fan curve */
-		return (data->have_curve & BIT(pwm)) ? attr->mode : 0;
+	if (nr >= 2) {	/* fan curve */
+		if (!(data->have_curve & BIT(pwm)))
+			return 0;
+		return (data->curve_writable & BIT(pwm)) ? attr->mode : 0444;
+	}
 
 	if (data->have_fan_ctrl & BIT(pwm))
 		return attr->mode | 0200;
@@ -1472,32 +1709,6 @@ static inline void nct6683_init_device(struct nct6683_data *data)
 		nct6683_write(data, NCT6683_HWM_CFG, tmp | 0x80);
 }
 
-static u16 nct6687dr_curve_mode_reg(int ch)
-{
-	return ch < 8 ? NCT6687DR_REG_CURVE_MODE(ch) :
-			NCT6687DR_REG_CURVE_MODE_SYS(ch);
-}
-
-/*
- * A fan curve sets a duty cycle if its mode register is 0x40 and the high
- * byte of each output is zero. The low byte then holds the duty cycle.
- */
-static bool nct6687dr_curve_is_pwm(struct nct6683_data *data, int ch)
-{
-	int p;
-
-	if (nct6683_read(data, nct6687dr_curve_mode_reg(ch)) !=
-	    NCT6687DR_CURVE_MODE_PWM)
-		return false;
-
-	for (p = 0; p < NCT6687DR_CURVE_POINTS; p++) {
-		if (nct6683_read(data, NCT6687DR_REG_CURVE_OUT_HI(ch, p)))
-			return false;
-	}
-
-	return true;
-}
-
 /*
  * There are a total of 24 fan inputs. Each can be configured as input
  * or as output. A maximum of 16 inputs and 8 outputs is configurable.
@@ -1533,11 +1744,20 @@ nct6683_setup_fans(struct nct6683_data *data)
 
 		/* Only report fan curves which set a duty cycle */
 		for (i = 0; i < NCT6683_NUM_REG_FAN; i++) {
-			if ((data->have_fan_ctrl & BIT(i)) &&
-			    nct6687dr_curve_is_pwm(data, i))
-				data->have_curve |= BIT(i);
+			struct nct6687dr_curve curve;
+
+			if (!(data->have_fan_ctrl & BIT(i)) ||
+			    !nct6687dr_curve_read(data, i, &curve))
+				continue;
+			data->have_curve |= BIT(i);
+			if (nct6687dr_curve_valid(&curve))
+				data->curve_writable |= BIT(i);
 		}
 	}
+
+	if (data->customer_id == NCT6683_CUSTOMER_ID_ASROCK8 ||
+	    data->customer_id == NCT6683_CUSTOMER_ID_AMD)
+		data->have_fan_ctrl = data->have_pwm & GENMASK(7, 0);
 }
 
 /*
@@ -1583,6 +1803,32 @@ static void nct6683_setup_sensors(struct nct6683_data *data)
 	}
 }
 
+/*
+ * Hand the fans the driver switched to manual mode back to the EC, so that
+ * they do not stay at a fixed duty cycle once nobody is left to adjust it.
+ */
+static void nct6683_restore_fan_control(void *_dev)
+{
+	struct device *dev = _dev;
+	struct nct6683_data *data = dev_get_drvdata(dev);
+	unsigned long manual;
+	int ch, err;
+
+	mutex_lock(&data->update_lock);
+	manual = data->pwm_manual;
+	for_each_set_bit(ch, &manual, NCT6683_NUM_REG_FAN) {
+		err = nct6683_fan_ctrl_update(data, ch, false, -1);
+		if (err) {
+			dev_warn(dev, "Failed to restore automatic mode of pwm%d: %d\n",
+				 ch + 1, err);
+			/* The EC does not respond, skip the remaining channels */
+			if (err == -ETIMEDOUT)
+				break;
+		}
+	}
+	mutex_unlock(&data->update_lock);
+}
+
 static int nct6683_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1592,6 +1838,7 @@ static int nct6683_probe(struct platform_device *pdev)
 	struct device *hwmon_dev;
 	struct resource *res;
 	int groups = 0;
+	int err;
 	char build[16];
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
@@ -1613,32 +1860,21 @@ static int nct6683_probe(struct platform_device *pdev)
 	/* By default only instantiate driver if the customer ID is known */
 	switch (data->customer_id) {
 	case NCT6683_CUSTOMER_ID_INTEL:
-		break;
 	case NCT6683_CUSTOMER_ID_MITAC:
-		break;
 	case NCT6683_CUSTOMER_ID_MSI:
-		break;
 	case NCT6683_CUSTOMER_ID_MSI2:
-		break;
 	case NCT6683_CUSTOMER_ID_MSI3:
-		break;
 	case NCT6683_CUSTOMER_ID_MSI4:
-		break;
 	case NCT6683_CUSTOMER_ID_AMD:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK2:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK3:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK4:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK5:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK6:
-		break;
 	case NCT6683_CUSTOMER_ID_ASROCK7:
+	case NCT6683_CUSTOMER_ID_ASROCK8:
+	case NCT6683_CUSTOMER_ID_ASROCK9:
 		break;
 	default:
 		if (!force)
@@ -1707,6 +1943,13 @@ static int nct6683_probe(struct platform_device *pdev)
 		 nct6683_read(data, NCT6683_REG_VERSION_LO),
 		 build);
 
+	if (data->have_fan_ctrl) {
+		err = devm_add_action_or_reset(dev, nct6683_restore_fan_control,
+					       dev);
+		if (err)
+			return err;
+	}
+
 	hwmon_dev = devm_hwmon_device_register_with_groups(dev,
 			nct6683_device_names[data->kind], data, data->groups);
 	return PTR_ERR_OR_ZERO(hwmon_dev);
@@ -1727,12 +1970,29 @@ static int nct6683_suspend(struct device *dev)
 static int nct6683_resume(struct device *dev)
 {
 	struct nct6683_data *data = dev_get_drvdata(dev);
-	unsigned long manual;
+	struct nct6687dr_curve curve;
+	unsigned long manual, set;
 	int ch, err;
 
 	mutex_lock(&data->update_lock);
 
 	nct6683_write(data, NCT6683_HWM_CFG, data->hwm_cfg);
+
+	/* The BIOS may restore its own fan curves, so restore ours first */
+	set = data->curve_set;
+	for_each_set_bit(ch, &set, NCT6683_NUM_REG_FAN) {
+		if (nct6687dr_curve_read(data, ch, &curve) &&
+		    !memcmp(&curve, &data->curve[ch], sizeof(curve)))
+			continue;
+		err = nct6687dr_curve_apply(data, ch, &data->curve[ch]);
+		if (err) {
+			dev_warn(dev, "Failed to restore fan curve of pwm%d: %d\n",
+				 ch + 1, err);
+			/* The EC does not respond, skip everything else */
+			if (err == -ETIMEDOUT)
+				goto out;
+		}
+	}
 
 	/* The BIOS may switch the fans back to automatic mode */
 	manual = data->pwm_manual;
@@ -1749,6 +2009,7 @@ static int nct6683_resume(struct device *dev)
 		}
 	}
 
+out:
 	/* Force re-reading all values */
 	data->valid = false;
 	mutex_unlock(&data->update_lock);

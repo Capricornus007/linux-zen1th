@@ -1498,8 +1498,8 @@ static ssize_t lcd_proc_write(struct file *file, const char __user *buf,
 	cmd[len] = '\0';
 
 	levels = dev->backlight_dev->props.max_brightness + 1;
-	if (sscanf(cmd, " brightness : %i", &value) != 1 &&
-	    value < 0 && value > levels)
+	if (sscanf(cmd, " brightness : %i", &value) != 1 ||
+	    value < 0 || value >= levels)
 		return -EINVAL;
 
 	if (set_lcd_brightness(dev, value))
@@ -1678,8 +1678,8 @@ static ssize_t fan_proc_write(struct file *file, const char __user *buf,
 		return -EFAULT;
 	cmd[len] = '\0';
 
-	if (sscanf(cmd, " force_on : %i", &value) != 1 &&
-	    value != 0 && value != 1)
+	if (sscanf(cmd, " force_on : %i", &value) != 1 ||
+	    value < 0 || value > 1)
 		return -EINVAL;
 
 	if (set_fan_status(dev, value))
@@ -3301,7 +3301,7 @@ static void toshiba_acpi_remove(struct platform_device *pdev)
 	}
 
 	if (dev->battery_charge_mode_supported)
-		battery_hook_unregister(&battery_hook);
+		acpi_battery_hook_unregister(&battery_hook);
 
 	if (toshiba_acpi)
 		toshiba_acpi = NULL;
@@ -3567,7 +3567,7 @@ iio_error:
 	 * set, this must be done after toshiba_acpi is assigned.
 	 */
 	if (dev->battery_charge_mode_supported)
-		battery_hook_register(&battery_hook);
+		acpi_battery_hook_register(&battery_hook);
 
 	return 0;
 

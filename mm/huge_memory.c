@@ -2104,7 +2104,10 @@ int copy_huge_pud(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		struct folio *folio = page_folio(page);
 
 		if (unlikely(folio_ref_count_over_limit(folio))) {
-			/* Skip this PUD; it can be faulted in later. */
+			/*
+			 * VM_MIXEDMAP may contain driver-inserted pages with no
+			 * fault handler to reconstruct the mapping.
+			 */
 			ret = (dst_vma->vm_flags & VM_MIXEDMAP) ? -ENOMEM : 0;
 			goto out_unlock;
 		}

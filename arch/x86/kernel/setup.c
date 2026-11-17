@@ -627,7 +627,7 @@ static void __init arch_reserve_crashkernel(void)
 	}
 
 	reserve_crashkernel_generic(crash_size, crash_base, low_size, high);
-	reserve_crashkernel_cma(cma_size);
+	crashkernel_cma_set_size(cma_size);
 }
 
 static struct resource standard_io_resources[] = {
@@ -1099,10 +1099,6 @@ void __init setup_arch(char **cmdline_p)
 
 	/* preallocate 4k for mptable mpc */
 	e820__memblock_alloc_reserved_mpc_new();
-
-#ifdef CONFIG_X86_CHECK_BIOS_CORRUPTION
-	setup_bios_corruption_check();
-#endif
 
 #ifdef CONFIG_X86_32
 	printk(KERN_DEBUG "initial memory mapped: [mem 0x00000000-%#010lx]\n",

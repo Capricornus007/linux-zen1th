@@ -2233,11 +2233,13 @@ vm_fault_t finish_fault(struct vm_fault *vmf);
 #define FOLIO_REF_COUNT_ADMIN_LIMIT	(INT_MAX - (1U << 25))
 #define FOLIO_REF_COUNT_FLUSH_LIMIT	(INT_MAX - (1U << 27))
 
-bool __folio_ref_count_over_limit(unsigned int ref_count);
+bool folio_ref_count_over_limit_slowpath(const struct folio *folio,
+		unsigned int ref_count);
 
 /**
- * folio_ref_count_over_limit - Check whether to refuse more folio references.
+ * __folio_ref_count_over_limit - Check whether to refuse more folio references.
  * @folio: The folio.
+ * @ref_count: The sampled folio reference count.
  *
  * Check before adding page table mappings or other significant refcount users
  * to pagecache folios (!hugetlb), either before acquiring references or
@@ -2254,13 +2256,25 @@ bool __folio_ref_count_over_limit(unsigned int ref_count);
  *
  * Return: True if the caller should refuse the operation, false otherwise.
  */
-static inline bool folio_ref_count_over_limit(const struct folio *folio)
+static inline bool __folio_ref_count_over_limit(const struct folio *folio,
+		unsigned int ref_count)
 {
-	const unsigned int ref_count = folio_ref_count(folio);
-
 	if (likely(ref_count < FOLIO_REF_COUNT_LIMIT))
 		return false;
-	return __folio_ref_count_over_limit(ref_count);
+	return folio_ref_count_over_limit_slowpath(folio, ref_count);
+}
+
+/**
+ * folio_ref_count_over_limit - Check whether to refuse more folio references.
+ * @folio: The folio.
+ *
+ * See __folio_ref_count_over_limit().
+ *
+ * Return: True if the caller should refuse the operation, false otherwise.
+ */
+static inline bool folio_ref_count_over_limit(const struct folio *folio)
+{
+	return __folio_ref_count_over_limit(folio, folio_ref_count(folio));
 }
 
 /**
@@ -2301,9 +2315,11 @@ static inline void get_page(struct page *page)
  */
 static inline __must_check bool folio_get_checked(struct folio *folio)
 {
-	if (WARN_ON_ONCE(folio_ref_count(folio) <= 0))
+	const int ref_count = folio_ref_count(folio);
+
+	if (WARN_ON_ONCE(ref_count <= 0))
 		return false;
-	if (unlikely(folio_ref_count_over_limit(folio)))
+	if (unlikely(__folio_ref_count_over_limit(folio, ref_count)))
 		return false;
 	folio_ref_inc(folio);
 	return true;

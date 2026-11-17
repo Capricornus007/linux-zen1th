@@ -2681,7 +2681,9 @@ L:	linux-amlogic@lists.infradead.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/clock/amlogic*
 F:	drivers/clk/meson/
-F:	include/dt-bindings/clock/amlogic,a1*
+F:	include/dt-bindings/clock/amlogic,*
+F:	include/dt-bindings/clock/axg*
+F:	include/dt-bindings/clock/g12a*
 F:	include/dt-bindings/clock/gxbb*
 F:	include/dt-bindings/clock/meson*
 
@@ -5369,6 +5371,7 @@ F:	Documentation/devicetree/bindings/pci/brcm,stb-pcie.yaml
 F:	drivers/pci/controller/pcie-brcmstb.c
 F:	drivers/platform/raspberrypi/vchiq-*
 F:	drivers/staging/vc04_services
+F:	include/linux/raspberrypi/mmal*
 F:	include/linux/raspberrypi/vchiq*
 N:	bcm2711
 N:	bcm2712
@@ -5853,6 +5856,13 @@ M:	Michael Chan <michael.chan@broadcom.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/broadcom/tg3.*
+
+BROADCOM VIDEOCORE SHARED MEMORY DRIVER
+M:	Raspberry Pi Kernel Maintenance <kernel-list@raspberrypi.com>
+L:	linux-kernel@vger.kernel.org
+S:	Maintained
+F:	drivers/platform/raspberrypi/vc-sm-cma/*
+F:	include/linux/raspberrypi/vc_sm_cma*
 
 BROADCOM VK DRIVER
 M:	Scott Branden <scott.branden@broadcom.com>
@@ -8906,6 +8916,7 @@ M:	Louis Chauvet <louis.chauvet@bootlin.com>
 R:	Haneen Mohammed <hamohammed.sa@gmail.com>
 R:	Simona Vetter <simona@ffwll.ch>
 R:	Melissa Wen <melissa.srw@gmail.com>
+R:	Oarora Etimis <oaroraetimis@gmail.com>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
@@ -9784,6 +9795,7 @@ S:	Orphan
 F:	drivers/edac/i3200_edac.c
 
 EDAC-I5000
+R:	Andrew Luebke <andrew.luebke@gmail.com>
 L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/i5000_edac.c
@@ -13837,7 +13849,7 @@ S:	Supported
 F:	drivers/counter/intel-qep.c
 
 INTEL SCU DRIVERS
-M:	Mika Westerberg <mika.westerberg@linux.intel.com>
+M:	Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
 S:	Maintained
 F:	drivers/platform/x86/intel_scu_*
 F:	include/linux/platform_data/x86/intel_scu_ipc.h
@@ -18433,6 +18445,14 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/microchip/sparx5/lan969x/*
 
+MICROCHIP LAN969X FAN CONTROLLER DRIVER
+M:	Robert Marko <robert.marko@sartura.hr>
+L:	linux-hwmon@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/hwmon/microchip,lan9691-fan.yaml
+F:	Documentation/hwmon/lan969x-fan.rst
+F:	drivers/hwmon/lan969x-fan.c
+
 MICROCHIP LCDFB DRIVER
 M:	Nicolas Ferre <nicolas.ferre@microchip.com>
 L:	linux-fbdev@vger.kernel.org
@@ -20142,6 +20162,8 @@ F:	drivers/ntb/hw/intel/
 NTFS FILESYSTEM
 M:	Namjae Jeon <linkinjeon@kernel.org>
 M:	Hyunchul Lee <hyc.lee@gmail.com>
+R:	Baolin Liu <liubaolin12138@163.com>
+R:	Baolin Liu <liubaolin@kylinos.cn>
 L:	ntfs@lists.linux.dev
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/ntfs.git
@@ -22323,6 +22345,7 @@ F:	drivers/pinctrl/samsung/
 PIN CONTROLLER - SINGLE
 M:	Tony Lindgren <tony@atomide.com>
 M:	Haojian Zhuang <haojian.zhuang@linaro.org>
+M:	Alexander Sverdlin <asv@kernel.org>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 L:	linux-omap@vger.kernel.org
 S:	Maintained
@@ -23825,11 +23848,12 @@ S:	Maintained
 T:	git https://github.com/pkshih/rtw.git
 F:	drivers/net/wireless/realtek/rtw89/
 
-REDMIBOOK WMI DRIVERS
-M:	Gladyshev Ilya <foxido@foxido.dev>
+BITLAND LAPTOP DRIVER
+M:	Mingyou Chen <qby140326@gmail.com>
+M:	Ilya Gladyshev <ilya.gladyshev@linux.dev>
 L:	platform-driver-x86@vger.kernel.org
 S:	Maintained
-F:	drivers/platform/x86/redmi-wmi.c
+F:	drivers/platform/x86/bitland-mifs-wmi.c
 
 REDPINE WIRELESS DRIVER
 L:	linux-wireless@vger.kernel.org
@@ -27034,7 +27058,7 @@ F:	Documentation/devicetree/bindings/perf/starfive,jh8100-starlink-pmu.yaml
 F:	drivers/perf/starfive_starlink_pmu.c
 
 STARFIVE TRNG DRIVER
-M:	Jia Jie Ho <jiajie.ho@starfivetech.com>
+M:	Lianfeng Ouyang <lianfeng.ouyang@starfivetech.com>
 S:	Supported
 F:	Documentation/devicetree/bindings/rng/starfive*
 F:	drivers/char/hw_random/jh7110-trng.c
@@ -30748,6 +30772,7 @@ F:	net/core/xdp.c
 F:	samples/bpf/xdp*
 F:	tools/testing/selftests/bpf/*/*xdp*
 F:	tools/testing/selftests/bpf/*xdp*
+F:	tools/testing/selftests/net/*xdp*
 K:	(?:\b|_)xdp(?:\b|_)
 
 XDP SOCKETS (AF_XDP)
@@ -30764,7 +30789,8 @@ F:	include/net/xsk_buff_pool.h
 F:	include/uapi/linux/if_xdp.h
 F:	include/uapi/linux/xdp_diag.h
 F:	net/xdp/
-F:	tools/testing/selftests/bpf/*xsk*
+F:	tools/testing/selftests/net/*xsk*
+F:	tools/testing/selftests/net/lib/xsk/
 
 XEN BLOCK SUBSYSTEM
 M:	Roger Pau Monné <roger@xenproject.org>

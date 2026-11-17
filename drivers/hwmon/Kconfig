@@ -1053,6 +1053,16 @@ config SENSORS_LAN966X
 	  This driver can also be built as a module. If so, the module
 	  will be called lan966x-hwmon.
 
+config SENSORS_LAN969X_FAN
+	tristate "Microchip LAN969x fan controller"
+	depends on ARCH_LAN969X || COMPILE_TEST
+	help
+	  If you say yes here you get support for the fan controller on
+	  Microchip LAN969x SoCs.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called lan969x-fan.
+
 config SENSORS_LATTEPANDA_SIGMA_EC
 	tristate "LattePanda Sigma EC hardware monitoring"
 	depends on X86
@@ -1079,6 +1089,24 @@ config SENSORS_LENOVO_EC
 
           This driver can also be built as a module. If so, the module
           will be called lenovo_ec_sensors.
+
+config SENSORS_LENOVO_SHM
+	tristate "Sensor reader for Lenovo EC sensor windows"
+	depends on ACPI
+	depends on DMI
+	depends on HAS_IOPORT
+	depends on !PPC
+	help
+	  If you say yes here you get support for fan and temperature
+	  sensors that Lenovo system firmware publishes in an EC
+	  shared-memory window. The driver only reads the window that the
+	  firmware has set up.
+
+	  A machine whose firmware lays the window out differently reports
+	  no sensors rather than wrong readings.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called lenovo-shm-sensors.
 
 config SENSORS_LINEAGE
 	tristate "Lineage Compact Power Line Power Entry Module"

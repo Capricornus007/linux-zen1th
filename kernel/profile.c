@@ -245,10 +245,8 @@ int __ref create_proc_profile(void)
 		return 0;
 	entry = proc_create("profile", S_IWUSR | S_IRUGO,
 			    NULL, &profile_proc_ops);
-	if (!entry) {
-		pr_err("profile: failed to create /proc/profile\n");
+	if (!entry)
 		return -ENOMEM;
-	}
 	proc_set_size(entry, (1 + prof_len) * sizeof(atomic_t));
 	return 0;
 }

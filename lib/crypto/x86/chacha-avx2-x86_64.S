@@ -46,7 +46,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# on four words in each matrix in parallel, but requires shuffling to
 	# rearrange the words after each round.
 
-	# x0..3[0-2] = s0..3
+	# x0..3[0-1] = s0..3
 	vbroadcasti128	0x00(%rdi),%ymm0
 	vbroadcasti128	0x10(%rdi),%ymm1
 	vbroadcasti128	0x20(%rdi),%ymm2
@@ -74,8 +74,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm6
-	vpslld		$12,%ymm6,%ymm6
+	vpslld		$12,%ymm1,%ymm6
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm6,%ymm1,%ymm1
 
@@ -87,8 +86,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm7
-	vpslld		$7,%ymm7,%ymm7
+	vpslld		$7,%ymm1,%ymm7
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm7,%ymm1,%ymm1
 
@@ -107,8 +105,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm6
-	vpslld		$12,%ymm6,%ymm6
+	vpslld		$12,%ymm1,%ymm6
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm6,%ymm1,%ymm1
 
@@ -120,8 +117,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm7
-	vpslld		$7,%ymm7,%ymm7
+	vpslld		$7,%ymm1,%ymm7
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm7,%ymm1,%ymm1
 
@@ -212,7 +208,7 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# required word shuffling has a rather high latency, we can do the
 	# arithmetic on two matrix-pairs without much slowdown.
 
-	# x0..3[0-4] = s0..3
+	# x0..3[0-3] = s0..3
 	vbroadcasti128	0x00(%rdi),%ymm0
 	vbroadcasti128	0x10(%rdi),%ymm1
 	vbroadcasti128	0x20(%rdi),%ymm2
@@ -251,15 +247,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm1,%ymm10
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm5,%ymm10
 	vpsrld		$20,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -275,15 +269,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm1,%ymm10
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm5,%ymm10
 	vpsrld		$25,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -309,15 +301,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm1,%ymm10
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm5,%ymm10
 	vpsrld		$20,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -333,15 +323,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm1,%ymm10
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm5,%ymm10
 	vpsrld		$25,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -495,7 +483,7 @@ SYM_FUNC_START(chacha_4to8blocks_avx2)
 	vmovdqa		ROT8(%rip),%ymm2
 	vmovdqa		ROT16(%rip),%ymm3
 
-	# x12 += counter values 0-3
+	# x12 += counter values 0-7
 	vpaddd		%ymm1,%ymm12,%ymm12
 
 .Ldoubleround8:
@@ -596,7 +584,7 @@ SYM_FUNC_START(chacha_4to8blocks_avx2)
 	vmovdqa		%ymm0,0x00(%rsp)
 	vpxor		%ymm0,%ymm15,%ymm15
 	vpshufb		%ymm3,%ymm15,%ymm15
-	# x1 += x6, x12 = rotl32(x12 ^ x1, 16)%ymm0
+	# x1 += x6, x12 = rotl32(x12 ^ x1, 16)
 	vpaddd		0x20(%rsp),%ymm6,%ymm0
 	vmovdqa		%ymm0,0x20(%rsp)
 	vpxor		%ymm0,%ymm12,%ymm12
@@ -686,7 +674,7 @@ SYM_FUNC_START(chacha_4to8blocks_avx2)
 	sub		$2,%r8d
 	jnz		.Ldoubleround8
 
-	# x0..15[0-3] += s[0..15]
+	# x0..15[0-7] += s[0..15]
 	vpbroadcastd	0x00(%rdi),%ymm0
 	vpaddd		0x00(%rsp),%ymm0,%ymm0
 	vmovdqa		%ymm0,0x00(%rsp)
@@ -724,7 +712,7 @@ SYM_FUNC_START(chacha_4to8blocks_avx2)
 	vpbroadcastd	0x3c(%rdi),%ymm0
 	vpaddd		%ymm0,%ymm15,%ymm15
 
-	# x12 += counter values 0-3
+	# x12 += counter values 0-7
 	vpaddd		%ymm1,%ymm12,%ymm12
 
 	# interleave 32-bit words in state n, n+1

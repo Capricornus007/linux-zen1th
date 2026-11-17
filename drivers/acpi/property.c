@@ -528,7 +528,7 @@ static void acpi_data_add_buffer_props(acpi_handle handle,
 		obj->buffer.length = buf_obj->buffer.length;
 		obj->buffer.pointer = buf_obj->buffer.pointer;
 
-		props->bufs[i] = buf.pointer;
+		props->bufs[*count] = buf.pointer;
 		package++;
 		(*count)++;
 	}
@@ -669,7 +669,8 @@ static void acpi_destroy_nondev_subnodes(struct list_head *list)
 		acpi_destroy_nondev_subnodes(&dn->data.subnodes);
 		wait_for_completion(&dn->kobj_done);
 		list_del(&dn->sibling);
-		ACPI_FREE((void *)dn->data.pointer);
+		if (dn->handle)
+			ACPI_FREE((void *)dn->data.pointer);
 		acpi_free_device_properties(&dn->data.properties);
 		kfree(dn);
 	}

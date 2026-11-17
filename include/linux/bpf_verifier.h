@@ -477,6 +477,8 @@ struct bpf_func_state {
 	 * reused after returns, while this ID is preserved across state clones.
 	 */
 	u32 diag_frame_id;
+	/* parent_id of the args that are gone when this frame returns */
+	u32 frame_id;
 	/* subprog number == index within subprog_info
 	 * zero == main subprog
 	 */
@@ -1359,6 +1361,8 @@ struct bpf_verifier_env {
 	char tmp_arg_name[32];
 	struct bpf_insn insn_buf[INSN_BUF_SIZE];
 	struct bpf_insn epilogue_buf[INSN_BUF_SIZE];
+	/* See check_fmodret_retval() */
+	const char *fmodret_retvals;
 	struct bpf_liveness *liveness;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;

@@ -1054,6 +1054,8 @@ static int flow_compute_need_const(struct bpf_verifier_env *env, struct flow_nee
 	if (jump) {
 		/* the verifier compares what the prog and its callbacks return with a range */
 		ret[0] = BIT(BPF_REG_0);
+		/* no insn takes the address of this one. It's 0 if there is none */
+		ret[env->exception_callback_subprog] = BIT(BPF_REG_0);
 		for (i = 0; i < env->prog->len; i++) {
 			if (!bpf_pseudo_func(&insns[i]))
 				continue;
@@ -2753,9 +2755,8 @@ again:
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "from %d to %d: within\n", prev, insn_idx);
 		err = flow_cycle_closed(env, &t->st, &s->st) ?:
-		      flow_unite(flow, s->st.flow_entry, t->st.flow_entry);
-		flow_free_state(env, s);
-		return err ?: 1;
+		      flow_unite(flow, s->st.flow_entry, t->st.flow_entry) ?: 1;
+		goto err_free;
 	}
 
 	flow_sweep_trips(env, set, s);

@@ -3783,6 +3783,8 @@ static struct folio *next_uptodate_folio(struct xa_state *xas,
 			continue;
 		if (!folio_try_get(folio))
 			continue;
+		if (unlikely(folio_ref_count_over_limit(folio)))
+			goto skip;
 		if (folio_test_locked(folio))
 			goto skip;
 		/* Has the page moved or been split? */
@@ -3984,11 +3986,6 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 			break;
 		}
 
-		if (unlikely(folio_ref_count_over_limit(folio))) {
-			folio_ref_dec(folio);
-			goto next;
-		}
-
 		addr += (xas.xa_index - last_pgoff) << PAGE_SHIFT;
 		vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
@@ -4030,7 +4027,6 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 					   mmap_miss - 1);
 		}
 
-next:
 		folio_unlock(folio);
 	} while ((folio = next_uptodate_folio(&xas, mapping, end_pgoff)) != NULL);
 	add_mm_counter(vma->vm_mm, folio_type, rss);

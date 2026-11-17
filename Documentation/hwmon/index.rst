@@ -122,7 +122,9 @@ Hardware Monitoring Kernel Drivers
    kbatt
    kfan
    lan966x
+   lan969x-fan
    lattepanda-sigma-ec
+   lenovo-shm-sensors
    lineage-pem
    lm25066
    lm63
