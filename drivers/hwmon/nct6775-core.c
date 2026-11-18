@@ -1508,10 +1508,10 @@ static int nct6775_update_pwm(struct device *dev)
 
 		if (!data->temp_tolerance[0][i] ||
 		    data->pwm_enable[i] != speed_cruise)
-			data->temp_tolerance[0][i] = fanmodecfg & 0x0f;
+			data->temp_tolerance[0][i] = fanmodecfg & data->tolerance_mask;
 		if (!data->target_speed_tolerance[i] ||
 		    data->pwm_enable[i] == speed_cruise) {
-			u8 t = fanmodecfg & 0x0f;
+			u8 t = fanmodecfg & data->tolerance_mask;
 
 			if (data->REG_TOLERANCE_H) {
 				err = nct6775_read_value(data, data->REG_TOLERANCE_H[i], &reg);
@@ -3051,7 +3051,7 @@ store_temp_tolerance(struct device *dev, struct device_attribute *attr,
 
 	mutex_lock(&data->update_lock);
 	data->temp_tolerance[index][nr] = val;
-	if (index)
+	if (!index)
 		err = pwm_update_registers(data, nr);
 	else
 		err = nct6775_write_value(data, data->REG_CRITICAL_TEMP_TOLERANCE[nr], val);
@@ -3710,6 +3710,9 @@ int nct6775_probe(struct device *dev, struct nct6775_data *data,
 
 		data->fan_from_reg = fan_from_reg13;
 		data->fan_from_reg_min = fan_from_reg13;
+		data->target_temp_mask = 0xff;
+		data->tolerance_mask = 0x07;
+		data->speed_tolerance_limit = 63;
 
 		data->temp_label = nct6776_temp_label;
 		data->temp_mask = NCT6776_TEMP_MASK;
@@ -3786,6 +3789,9 @@ int nct6775_probe(struct device *dev, struct nct6775_data *data,
 
 		data->fan_from_reg = fan_from_reg13;
 		data->fan_from_reg_min = fan_from_reg13;
+		data->target_temp_mask = 0xff;
+		data->tolerance_mask = 0x07;
+		data->speed_tolerance_limit = 63;
 
 		data->temp_label = nct6776_temp_label;
 		data->temp_mask = NCT6776_TEMP_MASK;
@@ -3863,6 +3869,9 @@ int nct6775_probe(struct device *dev, struct nct6775_data *data,
 
 		data->fan_from_reg = fan_from_reg13;
 		data->fan_from_reg_min = fan_from_reg13;
+		data->target_temp_mask = 0xff;
+		data->tolerance_mask = 0x07;
+		data->speed_tolerance_limit = 63;
 
 		data->temp_label = nct6776_temp_label;
 		data->temp_mask = NCT6776_TEMP_MASK;

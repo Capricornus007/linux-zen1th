@@ -220,7 +220,7 @@ rpi_register_hwmon_driver(struct device *dev, struct rpi_firmware *fw)
 	if (IS_ERR(pdev))
 		return;
 
-	 fw->hwmon_dev = pdev;
+	fw->hwmon_dev = pdev;
 }
 
 static void rpi_register_clk_driver(struct device *dev, struct rpi_firmware *fw)
@@ -246,7 +246,7 @@ static void rpi_register_clk_driver(struct device *dev, struct rpi_firmware *fw)
 	if (IS_ERR(pdev))
 		return;
 
-	 fw->clk_dev = pdev;
+	fw->clk_dev = pdev;
 }
 
 static void rpi_register_rtc_driver(struct device *dev, struct rpi_firmware *fw)
@@ -267,7 +267,7 @@ static void rpi_register_rtc_driver(struct device *dev, struct rpi_firmware *fw)
 	if (IS_ERR(pdev))
 		return;
 
-	 fw->rtc_dev = pdev;
+	fw->rtc_dev = pdev;
 }
 
 unsigned int rpi_firmware_clk_get_max_rate(struct rpi_firmware *fw, unsigned int id)

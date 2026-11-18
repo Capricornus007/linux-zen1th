@@ -406,6 +406,9 @@ static int max17040_set_property(struct power_supply *psy,
 			break;
 		}
 		ret = max17040_set_low_soc_alert(chip, val->intval);
+		if (ret)
+			return ret;
+
 		chip->low_soc_alert = val->intval;
 		break;
 	default:
@@ -583,11 +586,9 @@ static int max17040_probe(struct i2c_client *client)
 
 	if (enable_irq) {
 		ret = max17040_enable_alert_irq(chip);
-		if (ret) {
-			client->irq = 0;
-			dev_warn(&client->dev,
-				 "Failed to get IRQ err %d\n", ret);
-		}
+		if (ret)
+			return dev_err_probe(&client->dev, ret,
+					     "Failed to get IRQ\n");
 	}
 
 	return 0;

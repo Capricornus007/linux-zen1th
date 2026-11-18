@@ -12,7 +12,6 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 
-#include <brcm_hw_ids.h>
 #include <brcmu_utils.h>
 #include <brcmu_wifi.h>
 

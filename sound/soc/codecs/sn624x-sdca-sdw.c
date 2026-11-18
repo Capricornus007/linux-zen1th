@@ -1736,11 +1736,9 @@ static int sn624x_sdca_sdw_probe(struct sdw_slave *slave,
 	regmap = devm_regmap_init_sdw_mbq_cfg(&slave->dev, slave,
 					      &sn624x_sdca_regmap,
 					      &sn624x_sdca_mbq_cfg);
-	if (IS_ERR(regmap)) {
-		dev_err(&slave->dev, "sn624x: devm_regmap_init_sdw_mbq_cfg failed (%ld)\n",
-			PTR_ERR(regmap));
-		return PTR_ERR(regmap);
-	}
+	if (IS_ERR(regmap))
+		return dev_err_probe(&slave->dev, PTR_ERR(regmap),
+				     "devm_regmap_init_sdw_mbq_cfg failed\n");
 
 	ret = sn624x_sdca_init(&slave->dev, regmap, slave);
 	if (ret < 0)
@@ -1771,6 +1769,8 @@ static void sn624x_sdca_sdw_remove(struct sdw_slave *slave)
 static const struct sdw_device_id sn624x_sdca_id[] = {
 	SDW_SLAVE_ENTRY_EXT(0x0496, 0x6242, 0x3, 0x1, 0),
 	SDW_SLAVE_ENTRY_EXT(0x0496, 0x6244, 0x3, 0x1, 0),
+	/* SN6245 is register-compatible with SN6244 (jack/amp/dmic). */
+	SDW_SLAVE_ENTRY_EXT(0x0496, 0x6245, 0x3, 0x1, 0),
 	SDW_SLAVE_ENTRY_EXT(0x0496, 0x6247, 0x3, 0x1, 0),
 	{ }
 };

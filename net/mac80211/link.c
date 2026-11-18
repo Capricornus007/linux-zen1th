@@ -256,9 +256,9 @@ static void ieee80211_tear_down_links(struct ieee80211_sub_if_data *sdata,
 		if (WARN_ON(!link))
 			continue;
 		ieee80211_remove_link_keys(link, &keys);
-		stop[link_id] = link;
 		if (link == &sdata->deflink)
 			ieee80211_link_debugfs_remove(link);
+		stop[link_id] = link;
 	}
 
 	/* drain RCU readers before cancelling work they may queue */
@@ -453,7 +453,6 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
 		for_each_set_bit(link_id, &rem, IEEE80211_MLD_MAX_NUM_LINKS)
 			ieee80211_link_attach(old_data[link_id]);
 		ieee80211_set_vif_links_bitmaps(sdata, old_links, old_dormant);
-
 		/* the new links were published, wait before freeing them */
 		synchronize_rcu();
 		/* and free (only) the newly allocated links */

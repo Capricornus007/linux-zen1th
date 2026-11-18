@@ -124,6 +124,9 @@ static int ksmbd_vfs_path_lookup(struct ksmbd_share_config *share_conf,
 void ksmbd_vfs_query_maximal_access(const struct mnt_idmap *idmap,
 				   struct dentry *dentry, __le32 *daccess)
 {
+	struct dentry *parent;
+	struct inode *parent_inode;
+
 	*daccess = cpu_to_le32(FILE_READ_ATTRIBUTES | READ_CONTROL |
 			       SYNCHRONIZE);
 
@@ -139,8 +142,12 @@ void ksmbd_vfs_query_maximal_access(const struct mnt_idmap *idmap,
 	if (!inode_permission(idmap, d_inode(dentry), MAY_OPEN | MAY_EXEC))
 		*daccess |= FILE_EXECUTE_LE;
 
-	if (!inode_permission(idmap, d_inode(dentry->d_parent), MAY_EXEC | MAY_WRITE))
+	parent = dget_parent(dentry);
+	parent_inode = d_inode(parent);
+	if (parent_inode &&
+	    !inode_permission(idmap, parent_inode, MAY_EXEC | MAY_WRITE))
 		*daccess |= FILE_DELETE_LE;
+	dput(parent);
 }
 
 /**
@@ -731,9 +738,16 @@ int ksmbd_vfs_check_rename_share(struct ksmbd_work *work,
 				 const struct path *old_path)
 {
 	struct ksmbd_file *parent_fp;
+	struct dentry *parent;
 	int err = 0;
 
-	parent_fp = ksmbd_lookup_fd_inode(old_path->dentry->d_parent);
+	parent = dget_parent(old_path->dentry);
+	if (!d_inode(parent)) {
+		dput(parent);
+		return 0;
+	}
+	parent_fp = ksmbd_lookup_fd_inode(parent);
+	dput(parent);
 	if (!parent_fp)
 		return 0;
 
@@ -1685,8 +1699,7 @@ out:
 int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
 			   const struct path *path,
-			   struct smb_ntsd *pntsd, int len,
-			   bool get_write)
+			   const struct smb_ntsd *pntsd, int len)
 {
 	int rc;
 	struct ndr sd_ndr = {0}, acl_ndr = {0};
@@ -1694,6 +1707,15 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	struct xattr_smb_acl *smb_acl, *def_smb_acl = NULL;
 	struct dentry *dentry = path->dentry;
 	struct inode *inode = d_inode(dentry);
+	struct smb_ntsd *sd;
+
+	if (len < (int)sizeof(struct smb_ntsd))
+		return -EINVAL;
+
+	/* Shift the offsets in a copy and leave the caller's SD as it is */
+	sd = kmemdup(pntsd, len, KSMBD_DEFAULT_GFP);
+	if (!sd)
+		return -ENOMEM;
 
 	acl.version = 4;
 	acl.hash_type = XATTR_SD_HASH_TYPE_SHA256;
@@ -1702,14 +1724,14 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	memcpy(acl.desc, "posix_acl", 9);
 	acl.desc_len = 10;
 
-	pntsd->osidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->osidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->gsidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->gsidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->dacloffset =
-		cpu_to_le32(le32_to_cpu(pntsd->dacloffset) + NDR_NTSD_OFFSETOF);
+	sd->osidoffset =
+		cpu_to_le32(le32_to_cpu(sd->osidoffset) + NDR_NTSD_OFFSETOF);
+	sd->gsidoffset =
+		cpu_to_le32(le32_to_cpu(sd->gsidoffset) + NDR_NTSD_OFFSETOF);
+	sd->dacloffset =
+		cpu_to_le32(le32_to_cpu(sd->dacloffset) + NDR_NTSD_OFFSETOF);
 
-	acl.sd_buf = (char *)pntsd;
+	acl.sd_buf = sd;
 	acl.sd_size = len;
 
 	sha256(acl.sd_buf, acl.sd_size, acl.hash);
@@ -1743,7 +1765,7 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 
 	rc = ksmbd_vfs_setxattr(idmap, path,
 				XATTR_NAME_SD, sd_ndr.data,
-				sd_ndr.offset, 0, get_write);
+				sd_ndr.offset, 0, true);
 	if (rc < 0)
 		pr_err("Failed to store XATTR ntacl :%d\n", rc);
 
@@ -1752,6 +1774,7 @@ out:
 	kfree(acl_ndr.data);
 	kfree(smb_acl);
 	kfree(def_smb_acl);
+	kfree(sd);
 	return rc;
 }
 EXPORT_SYMBOL_IF_KUNIT(ksmbd_vfs_set_sd_xattr);

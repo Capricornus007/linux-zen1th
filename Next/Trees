@@ -190,6 +190,7 @@ dma-mapping	https://git.kernel.org/pub/scm/linux/kernel/git/mszyprowski/linux.gi
 asm-generic	https://git.kernel.org/pub/scm/linux/kernel/git/arnd/asm-generic#master
 alpha		https://git.kernel.org/pub/scm/linux/kernel/git/mattst88/alpha.git#alpha-next
 alpha-magnus	https://git.kernel.org/pub/scm/linux/kernel/git/lindholm/alpha.git#for-next
+hexagon		https://git.kernel.org/pub/scm/linux/kernel/git/bcain/linux.git#for-next
 arm		https://git.kernel.org/pub/scm/linux/kernel/git/rmk/linux.git#for-next
 arm64		https://git.kernel.org/pub/scm/linux/kernel/git/arm64/linux#for-next/core
 arm-perf	https://git.kernel.org/pub/scm/linux/kernel/git/will/linux.git#for-next/perf
@@ -435,4 +436,5 @@ hisilicon	https://github.com/hisilicon/linux-hisi.git#for-next
 device-id	https://git.kernel.org/pub/scm/linux/kernel/git/ukleinek/linux.git#device-id-rework
 kthread		https://git.kernel.org/pub/scm/linux/kernel/git/frederic/linux-dynticks.git#for-next
 kapi		https://git.kernel.org/pub/scm/linux/kernel/git/sashal/kapi.git#spec
+blum		https://git.kernel.org/pub/scm/linux/kernel/git/blum/linux.git#for-next
 pagemap-headers	git://git.infradead.org/users/willy/pagecache.git#headers
