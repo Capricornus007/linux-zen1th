@@ -250,7 +250,11 @@ bool __tlb_remove_folio_pages(struct mmu_gather *tlb, struct page *page,
 		unsigned int nr_pages, bool delay_rmap);
 
 #ifdef CONFIG_SMP
-#define tlb_can_delay_rmap() (true)
+/*
+ * This both sets 'delayed_rmap', and returns true. It would be an inline
+ * function, except we define it before the 'struct mmu_gather'.
+ */
+#define tlb_delay_rmap(tlb) (((tlb)->delayed_rmap = 1), true)
 extern void tlb_flush_rmaps(struct mmu_gather *tlb, struct vm_area_struct *vma);
 #endif
 
@@ -263,8 +267,8 @@ extern void tlb_flush_rmaps(struct mmu_gather *tlb, struct vm_area_struct *vma);
  * remote TLBs to flush and is not preemptible due to this
  * all happening under the page table lock.
  */
-#ifndef tlb_can_delay_rmap
-#define tlb_can_delay_rmap() (false)
+#ifndef tlb_delay_rmap
+#define tlb_delay_rmap(tlb) (false)
 static inline void tlb_flush_rmaps(struct mmu_gather *tlb, struct vm_area_struct *vma) { }
 #endif
 

@@ -41,6 +41,7 @@
 
    kobject
    kref
+   assoc_array
    xarray
    rbtree
    idr

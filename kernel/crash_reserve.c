@@ -507,6 +507,7 @@ void __init reserve_crashkernel_cma(void)
 		struct cma *res;
 
 		request_size = min(request_size, cma_size - reserved_size);
+
 		/* CMA area names show up in sysfs and debugfs, keep them unique */
 		if (crashk_cma_cnt)
 			snprintf(name, sizeof(name), "crashkernel%d", crashk_cma_cnt);

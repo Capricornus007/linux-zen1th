@@ -154,15 +154,12 @@ static ssize_t read_profile(struct kiocb *iocb, struct iov_iter *to)
 {
 	const size_t header_size = sizeof(unsigned int);
 	const size_t file_size = (prof_len + 1) * sizeof(unsigned int);
-	unsigned int sample_step;
+	unsigned int sample_step = (unsigned int)(1UL << prof_shift);
 	loff_t offset = iocb->ki_pos;
 	size_t count = iov_iter_count(to);
 	size_t pos;
 	size_t done = 0;
 	size_t n, copied;
-
-	/* Keep the shift word-sized before narrowing to the 32-bit ABI. */
-	sample_step = (unsigned int)(1UL << prof_shift);
 
 	if (offset < 0)
 		return -EINVAL;

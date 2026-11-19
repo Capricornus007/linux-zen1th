@@ -2197,11 +2197,6 @@ M:	Khuong Dinh <khuong@os.amperecomputing.com>
 S:	Supported
 F:	arch/arm64/boot/dts/apm/
 
-APPLIED MICRO (APM) X-GENE SOC EDAC
-S:	Orphan
-F:	Documentation/devicetree/bindings/edac/apm,xgene-edac.yaml
-F:	drivers/edac/xgene_edac.c
-
 APPLIED MICRO (APM) X-GENE SOC ETHERNET (V2) DRIVER
 M:	Iyappan Subramanian <iyappan@os.amperecomputing.com>
 M:	Keyur Chudgar <keyur@os.amperecomputing.com>
@@ -6069,6 +6064,7 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mkl/linux-can.git
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mkl/linux-can-next.git
 F:	Documentation/devicetree/bindings/net/can/
 F:	Documentation/devicetree/bindings/phy/ti,tcan104x-can.yaml
+F:	Documentation/networking/device_drivers/can/
 F:	drivers/net/can/
 F:	drivers/phy/phy-can-transceiver.c
 F:	include/linux/can/bittiming.h
@@ -8409,7 +8405,7 @@ F:	Documentation/devicetree/bindings/display/panel/panel-edp.yaml
 F:	drivers/gpu/drm/panel/panel-edp.c
 
 DRM DRIVER FOR GENERIC USB DISPLAY
-M:	Ruben Wauters <rubenru09@aol.com>
+M:	Ruben Wauters <ruben.wauters@linux.dev>
 S:	Maintained
 W:	https://github.com/notro/gud/wiki
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
@@ -9728,11 +9724,6 @@ L:	linux-mips@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/octeon_edac*
 
-EDAC-CAVIUM THUNDERX
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/thunderx_edac*
-
 EDAC-CORE
 M:	Borislav Petkov <bp@alien8.de>
 M:	Tony Luck <tony.luck@intel.com>
@@ -9755,11 +9746,6 @@ M:	Lei Wang <lewan@microsoft.com>
 L:	linux-edac@vger.kernel.org
 S:	Supported
 F:	drivers/edac/dmc520_edac.c
-
-EDAC-E752X
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/e752x_edac.c
 
 EDAC-E7XXX
 L:	linux-edac@vger.kernel.org
@@ -9785,16 +9771,6 @@ L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/i10nm_base.c
 
-EDAC-I3000
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i3000_edac.c
-
-EDAC-I3200
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i3200_edac.c
-
 EDAC-I5000
 R:	Andrew Luebke <andrew.luebke@gmail.com>
 L:	linux-edac@vger.kernel.org
@@ -9819,11 +9795,6 @@ L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/i7core_edac.c
 
-EDAC-I82975X
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i82975x_edac.c
-
 EDAC-IE31200
 M:	Jason Baron <jbaron@akamai.com>
 L:	linux-edac@vger.kernel.org
@@ -9842,11 +9813,6 @@ M:	Tony Luck <tony.luck@intel.com>
 L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/intel-bff.c
-
-EDAC-MPC85XX
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/mpc85xx_edac.[ch]
 
 EDAC-NPCM
 M:	Marvin Lin <kflin@nuvoton.com>
@@ -9894,10 +9860,19 @@ L:	linux-edac@vger.kernel.org
 S:	Odd Fixes
 F:	drivers/edac/ti_edac.c
 
-EDAC-X38
+EDAC ORPHANED DRIVERS
 L:	linux-edac@vger.kernel.org
 S:	Orphan
+F:	Documentation/devicetree/bindings/edac/apm,xgene-edac.yaml
+F:	drivers/edac/e752x_edac.c
+F:	drivers/edac/i3000_edac.c
+F:	drivers/edac/i3200_edac.c
+F:	drivers/edac/i82875p_edac.c
+F:	drivers/edac/i82975x_edac.c
+F:	drivers/edac/mpc85xx_edac.[ch]
+F:	drivers/edac/thunderx_edac*
 F:	drivers/edac/x38_edac.c
+F:	drivers/edac/xgene_edac.c
 
 EDIROL UA-101/UA-1000 DRIVER
 M:	Clemens Ladisch <clemens@ladisch.de>
@@ -13250,8 +13225,9 @@ L:	linux-mips@vger.kernel.org
 S:	Maintained
 F:	arch/mips/boot/dts/ingenic/
 F:	arch/mips/generic/board-ingenic.c
+F:	arch/mips/include/asm/ingenic-smp.h
 F:	arch/mips/include/asm/mach-ingenic/
-F:	arch/mips/ingenic/Kconfig
+F:	arch/mips/ingenic/
 F:	drivers/clk/ingenic/
 F:	drivers/dma/dma-jz4780.c
 F:	drivers/gpu/drm/ingenic/
@@ -18415,6 +18391,16 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/phy/microchip_t1.c
 
+MICROCHIP LAN9645X ETHERNET SWITCH DRIVER
+M:	Jens Emil Schulz Østergaard <jensemil.schulzostergaard@microchip.com>
+M:	UNGLinuxDriver@microchip.com
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/dsa/microchip,lan96455s-switch.yaml
+F:	drivers/net/dsa/microchip/lan9645x/*
+F:	include/linux/dsa/lan9645x.h
+F:	net/dsa/tag_lan9645x.c
+
 MICROCHIP LAN966X ETHERNET DRIVER
 M:	Horatiu Vultur <horatiu.vultur@microchip.com>
 M:	Daniel Machon <daniel.machon@microchip.com>
@@ -19719,6 +19705,10 @@ F:	samples/pktgen/
 F:	tools/net/
 F:	tools/testing/selftests/net/
 X:	Documentation/networking/batman-adv.rst
+X:	Documentation/networking/can.rst
+X:	Documentation/networking/device_drivers/can/
+X:	Documentation/networking/iso15765-2.rst
+X:	Documentation/networking/j1939.rst
 X:	Documentation/networking/mac80211-injection.rst
 X:	Documentation/networking/mac80211_hwsim/
 X:	Documentation/networking/regulatory.rst
@@ -21296,7 +21286,7 @@ S:	Maintained
 W:	https://linuxtv.org
 Q:	http://patchwork.linuxtv.org/project/linux-media/list/
 T:	git git://linuxtv.org/mhadli/v4l-dvb-davinci_devices.git
-F:	Documentation/devicetree/bindings/media/i2c/ovti,ov2659.txt
+F:	Documentation/devicetree/bindings/media/i2c/ovti,ov2659.yaml
 F:	drivers/media/i2c/ov2659.c
 F:	include/media/i2c/ov2659.h
 
@@ -30431,6 +30421,13 @@ L:	linux-input@vger.kernel.org
 S:	Maintained
 F:	drivers/hid/hid-wiimote*
 
+WILLSEMI WL2868C CAMERA PMIC
+M:	Qianhui Xu <xiaqinghuan@mail.ustc.edu.cn>
+L:	linux-kernel@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/regulator/willsemi,wl2868c.yaml
+F:	drivers/regulator/wl2868c-regulator.c
+
 WILOCITY WIL6210 WIRELESS DRIVER
 L:	linux-wireless@vger.kernel.org
 S:	Orphan
@@ -30940,6 +30937,7 @@ F:	drivers/iio/adc/xilinx-ams.c
 
 XILINX AXI ETHERNET DRIVER
 M:	Radhey Shyam Pandey <radhey.shyam.pandey@amd.com>
+M:	Suraj Gupta <suraj.gupta2@amd.com>
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/xlnx,axi-ethernet.yaml
 F:	drivers/net/ethernet/xilinx/xilinx_axienet*
