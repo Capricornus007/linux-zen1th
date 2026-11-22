@@ -185,7 +185,21 @@ jobs:
             if [ -n "$BLIST" ]; then
               echo "BORE 官方選中：$BLIST（next 基座 $KVER）"
               curl -fsSLO "https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches/testing/${BLIST}"
-              if git apply --check --3way "$BLIST" 2>/dev/null; then
+              # 官方 patch 跟的是 vanilla rcN；next 在 rcN 之後還會重構調度器。
+              # 實測 7.4-rc1 官方 patch 對 next 7.4-rc3 的 fair.c 23 hunk 中只有
+              # 1 個 FAILED（Hunk #19）：next 把第 2 個 requeue_delayed_entity
+              # 呼叫點改寫成 WARN_ON_ONCE，該 hunk 的目標程式碼已不存在 → 冗餘、
+              # 可安全略過（定義與剩下的唯一呼叫點仍由其他 hunk 改成 3 參數，
+              # 實際套用後全檔一致、編譯無誤）。
+              # repo 內針對该官方 patch 維護的 next 適配版只剔除這類已消失的 hunk，
+              # 其餘 22 hunk 原樣保留，BORE 功能零裁剪、不放棄 next 尖端。
+              # 優先用它，避免 3way 把衝突標記寫進 fair.c 後 exit 1（#41/#42/#43 連紅）。
+              ADAPTED="patches/bore-adapted-${BLIST}"
+              if [ -f "$ADAPTED" ]; then
+                echo "使用 repo 內 next 適配版：$ADAPTED"
+                patch -Np1 --fuzz=0 < "$ADAPTED" \
+                  || { echo "::error::BORE 適配版 $ADAPTED 套用失敗（next 又漂移，需更新適配版）"; exit 1; }
+              elif git apply --check --3way "$BLIST" 2>/dev/null; then
                 git apply --3way "$BLIST"
               elif patch -Np1 --dry-run < "$BLIST" >/dev/null 2>&1; then
                 patch -Np1 < "$BLIST"
