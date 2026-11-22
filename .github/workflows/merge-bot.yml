@@ -31,6 +31,12 @@ jobs:
           # linux-7.3.y 分支也在。主源仍用 kernel.org，只在三次全敗時才切鏡像。
           NEXTURL_MIRROR="https://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next"
           STABLEURL_MIRROR="https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux"
+          # 接下來會 cd meta/src 並 checkout next/master —— 那是一棵不含本倉
+          # patches/ 的內核源碼樹，相對路徑找不到 BORE 適配版。先把適配版帶到
+          # /tmp，後面用絕對路徑取用（run #44 實測：相對路徑 [ -f ] 失敗，
+          # 退回官方 patch 又在 fair.c Hunk#19 撞 3way 衝突）。
+          mkdir -p /tmp/bore-adapted
+          cp -f patches/bore-adapted-*.patch /tmp/bore-adapted/ 2>/dev/null || true
           cd meta
           # （旧的「增量：整合分支←next 尖端」路徑已刪除——zen1th 現在是無上游歷史的
           #   單提交快照分支，沒有共同祖先可 merge；且全量重組只要 ~10 分鐘，每日全量。）
@@ -194,7 +200,7 @@ jobs:
               # repo 內針對该官方 patch 維護的 next 適配版只剔除這類已消失的 hunk，
               # 其餘 22 hunk 原樣保留，BORE 功能零裁剪、不放棄 next 尖端。
               # 優先用它，避免 3way 把衝突標記寫進 fair.c 後 exit 1（#41/#42/#43 連紅）。
-              ADAPTED="patches/bore-adapted-${BLIST}"
+              ADAPTED="/tmp/bore-adapted/bore-adapted-${BLIST}"
               if [ -f "$ADAPTED" ]; then
                 echo "使用 repo 內 next 適配版：$ADAPTED"
                 patch -Np1 --fuzz=0 < "$ADAPTED" \
