@@ -661,6 +661,38 @@ static long madvise_pageout(struct madvise_behavior *madv_behavior)
 	return 0;
 }
 
+bool madvise_free_try_prepare_folio(struct folio *folio, int nr_mappings)
+{
+	if (!folio_test_swapcache(folio) && !folio_test_dirty(folio))
+		return true;
+
+	if (folio_mapcount(folio) != nr_mappings || !folio_trylock(folio))
+		return false;
+
+	/*
+	 * KSM folios can gain new mappings at any time, so we must
+	 * not clear their dirty flag.
+	 */
+	if (folio_test_ksm(folio))
+		goto unlock;
+
+	/*
+	 * Check under the folio lock that the folio is exclusive: we own all
+	 * mappings, and there are no references from swap entries.
+	 */
+	if (folio_mapcount(folio) != nr_mappings)
+		goto unlock;
+	if (folio_test_swapcache(folio) && !folio_free_swap(folio))
+		goto unlock;
+
+	folio_clear_dirty(folio);
+	folio_unlock(folio);
+	return true;
+unlock:
+	folio_unlock(folio);
+	return false;
+}
+
 static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 
@@ -753,37 +785,8 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			}
 		}
 
-		if (folio_test_swapcache(folio) || folio_test_dirty(folio)) {
-			if (!folio_trylock(folio))
-				continue;
-			/*
-			 * KSM folios can gain new mappings at any time, so we must
-			 * not clear their dirty flag.
-			 */
-			if (folio_test_ksm(folio)) {
-				folio_unlock(folio);
-				continue;
-			}
-
-			/*
-			 * If we have a large folio at this point, we know it is
-			 * fully mapped so if its mapcount is the same as its
-			 * number of pages, it must be exclusive.
-			 */
-			if (folio_mapcount(folio) != folio_nr_pages(folio)) {
-				folio_unlock(folio);
-				continue;
-			}
-
-			if (folio_test_swapcache(folio) &&
-			    !folio_free_swap(folio)) {
-				folio_unlock(folio);
-				continue;
-			}
-
-			folio_clear_dirty(folio);
-			folio_unlock(folio);
-		}
+		if (!madvise_free_try_prepare_folio(folio, folio_nr_pages(folio)))
+			continue;
 
 		if (pte_young(ptent) || pte_dirty(ptent)) {
 			clear_young_dirty_ptes(vma, addr, pte, nr, cydp_flags);
@@ -850,6 +853,19 @@ static int madvise_free_single_vma(struct madvise_behavior *madv_behavior)
 	return 0;
 }
 
+static void zap_range(struct madvise_behavior *madv_behavior,
+		zap_flags_t flags)
+{
+	const struct madvise_behavior_range *range = &madv_behavior->range;
+	struct zap_details details = {
+		.reclaim_pt = true,
+		.zap_flags = flags,
+	};
+
+	zap_vma_range_batched(madv_behavior->tlb, madv_behavior->vma,
+			      range->start, range->end - range->start, &details);
+}
+
 /*
  * Application no longer needs these pages.  If the pages are dirty,
  * it's OK to just throw them away.  The app will be more careful about
@@ -872,13 +888,7 @@ static int madvise_free_single_vma(struct madvise_behavior *madv_behavior)
 static long madvise_dontneed_single_vma(struct madvise_behavior *madv_behavior)
 
 {
-	struct madvise_behavior_range *range = &madv_behavior->range;
-	struct zap_details details = {
-		.reclaim_pt = true,
-	};
-
-	zap_vma_range_batched(madv_behavior->tlb, madv_behavior->vma,
-			      range->start, range->end - range->start, &details);
+	zap_range(madv_behavior, 0);
 	return 0;
 }
 
@@ -1217,9 +1227,11 @@ static long madvise_guard_install(struct madvise_behavior *madv_behavior)
 
 		/*
 		 * OK some of the range have non-guard pages mapped, zap
-		 * them. This leaves existing guard pages in place.
+		 * them. This also drops any PTE markers in the range,
+		 * including existing guard markers, which we reinstall on
+		 * the next attempt.
 		 */
-		zap_vma_range(vma, range->start, range->end - range->start);
+		zap_range(madv_behavior, ZAP_FLAG_DROP_MARKER);
 	}
 
 	/*
@@ -1845,6 +1857,7 @@ static bool madvise_batch_tlb_flush(int behavior)
 	case MADV_DONTNEED:
 	case MADV_DONTNEED_LOCKED:
 	case MADV_FREE:
+	case MADV_GUARD_INSTALL:
 		return true;
 	default:
 		return false;

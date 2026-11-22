@@ -1254,17 +1254,11 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		return ERR_PTR(-EINVAL);
 	}
 
+	/* Needed by ovl_allow_offline_changes() */
+	ofs->numdatalayer = ctx->nr_data;
 	err = -EINVAL;
 	for (i = 0; i < ctx->nr; i++) {
 		l = &ctx->lower[i];
-
-		/* Pseudo filesystems don't hold data for metacopy files. */
-		if (i >= ctx->nr - ctx->nr_data &&
-		    (l->path.dentry->d_sb->s_iflags & SB_I_PSEUDO)) {
-			pr_err("filesystem on %s not supported as data-only layer\n",
-			       l->name);
-			return ERR_PTR(-EINVAL);
-		}
 
 		err = ovl_lower_dir(l->name, &l->path, ofs, &sb->s_stack_depth);
 		if (err)
@@ -1295,7 +1289,6 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		lowerstack[i].dentry = dget(l->path.dentry);
 		lowerstack[i].layer = &ofs->layers[i + 1];
 	}
-	ofs->numdatalayer = ctx->nr_data;
 
 	return oe;
 }
@@ -1368,6 +1361,28 @@ static int ovl_check_overlapping_layers(struct super_block *sb,
 				      "lowerdir", true);
 		if (err)
 			return err;
+	}
+
+	return 0;
+}
+
+/*
+ * Pseudo filesystems don't mix with new overlayfs features.  Check the layers
+ * only after setting them up, as that may have turned off the index.
+ */
+static int ovl_check_pseudo_layers(struct ovl_fs *ofs)
+{
+	unsigned int i;
+
+	if (ovl_allow_offline_changes(ofs))
+		return 0;
+
+	for (i = 1; i < ofs->numlayer; i++) {
+		if (ofs->layers[i].mnt->mnt_sb->s_iflags & SB_I_PSEUDO) {
+			pr_err("pseudo filesystem on %s not supported with metacopy, index, redirect_dir=on, xino=on or data-only layers\n",
+			       ofs->config.lowerdirs[i]);
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -1536,6 +1551,15 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
 	/* If the upper fs is nonexistent, we mark overlayfs r/o too */
 	if (!ovl_upper_mnt(ofs))
 		sb->s_flags |= SB_RDONLY;
+
+	/* A mount without a workdir doesn't use the index */
+	if (!ofs->workdir)
+		ofs->config.index = false;
+
+	/* Before the uuid and the index dir are set up on the upper layer */
+	err = ovl_check_pseudo_layers(ofs);
+	if (err)
+		goto out_free_oe;
 
 	if (ovl_has_fsid(ofs) && ovl_upper_mnt(ofs)) {
 		/* Use per instance persistent uuid/fsid */

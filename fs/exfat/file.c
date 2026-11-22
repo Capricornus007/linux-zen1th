@@ -995,8 +995,8 @@ static ssize_t exfat_fallback_buffered_write(struct kiocb *iocb,
 	inode_dio_wait(file_inode(iocb->ki_filp));
 
 	written = iomap_file_buffered_write(&buffered, &source, exfat_write_iomap_next,
-			NULL, NULL);
-	if (written < 0)
+			&exfat_iomap_write_ops, NULL);
+	if (written <= 0)
 		return written;
 
 	end = buffered.ki_pos - 1;

@@ -450,13 +450,44 @@ static void ufs_setup_cstotal(struct super_block *sb)
 }
 
 /*
+ * Release everything ufs_read_cylinder_structures() allocated and clear
+ * everything released, so that no later error path can see a stale
+ * pointer: a read-only remount frees the structures through
+ * ufs_put_super_internal(), and a read-write remount re-reads them.
+ * Besides those two callers this is needed when a mount fails after the
+ * cylinder groups have been read: s_root is still NULL then, so
+ * generic_shutdown_super() never calls put_super and
+ * ufs_put_super_internal() does not run.
+ */
+static void ufs_free_cylinder_structures(struct super_block *sb)
+{
+	struct ufs_sb_info *sbi = UFS_SB(sb);
+	struct ufs_sb_private_info *uspi = sbi->s_uspi;
+	unsigned int i;
+
+	if (sbi->s_ucg) {
+		for (i = 0; i < uspi->s_ncg; i++)
+			brelse(sbi->s_ucg[i]);
+		kfree(sbi->s_ucg);
+		sbi->s_ucg = NULL;
+		for (i = 0; i < UFS_MAX_GROUP_LOADED; i++) {
+			kfree(sbi->s_ucpi[i]);
+			sbi->s_ucpi[i] = NULL;
+		}
+	}
+	sbi->s_cg_loaded = 0;
+	kfree(sbi->s_csp);
+	sbi->s_csp = NULL;
+}
+
+/*
  * Read on-disk structures associated with cylinder groups
  */
 static int ufs_read_cylinder_structures(struct super_block *sb)
 {
 	struct ufs_sb_info *sbi = UFS_SB(sb);
 	struct ufs_sb_private_info *uspi = sbi->s_uspi;
-	unsigned char * base, * space;
+	unsigned char *space;
 	unsigned size, blks, i;
 
 	UFSD("ENTER\n");
@@ -467,9 +498,9 @@ static int ufs_read_cylinder_structures(struct super_block *sb)
 	 */
 	size = uspi->s_cssize;
 	blks = (size + uspi->s_fsize - 1) >> uspi->s_fshift;
-	base = space = kmalloc(size, GFP_NOFS);
-	if (!base)
-		goto failed; 
+	space = kmalloc(size, GFP_NOFS);
+	if (!space)
+		goto failed;
 	sbi->s_csp = (struct ufs_csum *)space;
 	for (i = 0; i < blks; i++) {
 		struct buffer_head *bh = sb_bread(sb, uspi->s_csaddr + i);
@@ -512,17 +543,7 @@ static int ufs_read_cylinder_structures(struct super_block *sb)
 	return 1;
 
 failed:
-	kfree (base);
-	sbi->s_csp = NULL;
-	if (sbi->s_ucg) {
-		for (i = 0; i < uspi->s_ncg; i++)
-			if (sbi->s_ucg[i])
-				brelse (sbi->s_ucg[i]);
-		kfree (sbi->s_ucg);
-		sbi->s_ucg = NULL;
-		for (i = 0; i < UFS_MAX_GROUP_LOADED; i++)
-			kfree (sbi->s_ucpi[i]);
-	}
+	ufs_free_cylinder_structures(sb);
 	UFSD("EXIT (FAILED)\n");
 	return 0;
 }
@@ -589,13 +610,12 @@ static void ufs_put_super_internal(struct super_block *sb)
 {
 	struct ufs_sb_info *sbi = UFS_SB(sb);
 	struct ufs_sb_private_info *uspi = sbi->s_uspi;
-	unsigned char * base, * space;
+	unsigned char *space;
 	unsigned blks, size, i;
 
 	
 	UFSD("ENTER\n");
 
-	base = space = (char*) sbi->s_csp;
 	/* Don't write anything back after an error, see ufs_error(). */
 	if (sb_emergency_ro(sb))
 		goto release;
@@ -603,6 +623,7 @@ static void ufs_put_super_internal(struct super_block *sb)
 	ufs_put_cstotal(sb);
 	size = uspi->s_cssize;
 	blks = (size + uspi->s_fsize - 1) >> uspi->s_fshift;
+	space = (char *)sbi->s_csp;
 	for (i = 0; i < blks; i++, space += uspi->s_fsize) {
 		struct buffer_head *bh = sb_bread(sb, uspi->s_csaddr + i);
 
@@ -616,18 +637,9 @@ static void ufs_put_super_internal(struct super_block *sb)
 		brelse(bh);
 	}
 release:
-	for (i = 0; i < sbi->s_cg_loaded; i++) {
-		ufs_put_cylinder (sb, i);
-		kfree (sbi->s_ucpi[i]);
-	}
-	for (; i < UFS_MAX_GROUP_LOADED; i++) 
-		kfree (sbi->s_ucpi[i]);
-	for (i = 0; i < uspi->s_ncg; i++) 
-		brelse (sbi->s_ucg[i]);
-	kfree (sbi->s_ucg);
-	sbi->s_ucg = NULL;
-	kfree (base);
-	sbi->s_csp = NULL;
+	for (i = 0; i < sbi->s_cg_loaded; i++)
+		ufs_put_cylinder(sb, i);
+	ufs_free_cylinder_structures(sb);
 
 	UFSD("EXIT\n");
 }
@@ -1227,17 +1239,19 @@ magic_found:
 	inode = ufs_iget(sb, UFS_ROOTINO);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
-		goto failed;
+		goto failed_cg;
 	}
 	sb->s_root = d_make_root(inode);
 	if (!sb->s_root) {
 		ret = -ENOMEM;
-		goto failed;
+		goto failed_cg;
 	}
 
 	UFSD("EXIT\n");
 	return 0;
 
+failed_cg:
+	ufs_free_cylinder_structures(sb);
 failed:
 	if (ubh)
 		ubh_brelse_uspi (uspi);

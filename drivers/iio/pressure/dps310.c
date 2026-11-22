@@ -306,10 +306,9 @@ static int dps310_temp_workaround(struct dps310_data *data)
 	return regmap_write(data->regmap, 0x0f, 0x00);
 }
 
-static int dps310_startup(struct dps310_data *data)
+static int dps310_set_defaults(struct dps310_data *data)
 {
 	int rc;
-	int ready;
 
 	/*
 	 * Set up pressure sensor in single sample, one measurement per second
@@ -328,10 +327,14 @@ static int dps310_startup(struct dps310_data *data)
 		return rc;
 
 	/* Temp and pressure shifts are disabled when PRC <= 8 */
-	rc = regmap_write_bits(data->regmap, DPS310_CFG_REG,
-			       DPS310_PRS_SHIFT_EN | DPS310_TMP_SHIFT_EN, 0);
-	if (rc)
-		return rc;
+	return regmap_write_bits(data->regmap, DPS310_CFG_REG,
+				 DPS310_PRS_SHIFT_EN | DPS310_TMP_SHIFT_EN, 0);
+}
+
+static int dps310_startup(struct dps310_data *data)
+{
+	int rc;
+	int ready;
 
 	/* MEAS_CFG doesn't update correctly unless first written with 0 */
 	rc = regmap_write_bits(data->regmap, DPS310_MEAS_CFG,
@@ -410,7 +413,7 @@ static int dps310_set_pres_precision(struct dps310_data *data, int val)
 	int rc;
 	u8 shift_en;
 
-	if (val < 0 || val > 128)
+	if (val < 1 || val > 128)
 		return -EINVAL;
 
 	shift_en = val >= 16 ? DPS310_PRS_SHIFT_EN : 0;
@@ -433,7 +436,7 @@ static int dps310_set_temp_precision(struct dps310_data *data, int val)
 	int rc;
 	u8 shift_en;
 
-	if (val < 0 || val > 128)
+	if (val < 1 || val > 128)
 		return -EINVAL;
 
 	shift_en = val >= 16 ? DPS310_TMP_SHIFT_EN : 0;
@@ -455,7 +458,7 @@ static int dps310_set_pres_samp_freq(struct dps310_data *data, int freq)
 {
 	u8 val;
 
-	if (freq < 0 || freq > 128)
+	if (freq < 1 || freq > 128)
 		return -EINVAL;
 
 	val = ilog2(freq) << 4;
@@ -469,7 +472,7 @@ static int dps310_set_temp_samp_freq(struct dps310_data *data, int freq)
 {
 	u8 val;
 
-	if (freq < 0 || freq > 128)
+	if (freq < 1 || freq > 128)
 		return -EINVAL;
 
 	val = ilog2(freq) << 4;
@@ -548,6 +551,12 @@ static int dps310_reset_reinit(struct dps310_data *data)
 	int rc;
 
 	rc = dps310_reset_wait(data);
+	if (rc)
+		return rc;
+
+	/* Put back the configuration the reset cleared */
+	regcache_mark_dirty(data->regmap);
+	rc = regcache_sync_region(data->regmap, DPS310_PRS_CFG, DPS310_CFG_REG);
 	if (rc)
 		return rc;
 
@@ -999,10 +1008,18 @@ static int dps310_fill_channels(struct dps310_data *data,
 	unsigned int i;
 	int rc;
 
-	/* Compensation needs a temperature, so it is sampled either way */
-	rc = dps310_read_temp_raw_locked(data);
-	if (rc)
-		return rc;
+	if (test_bit(DPS310_SCAN_PRESSURE, scan_mask)) {
+		rc = dps310_read_pres_raw_locked(data);
+		if (rc)
+			return rc;
+
+		/* Waiting here would hold scans to the temperature rate */
+		dps310_refresh_temp_locked(data);
+	} else {
+		rc = dps310_read_temp_raw_locked(data);
+		if (rc)
+			return rc;
+	}
 
 	i = 0;
 	if (test_bit(DPS310_SCAN_TEMP, scan_mask)) {
@@ -1013,10 +1030,6 @@ static int dps310_fill_channels(struct dps310_data *data,
 	}
 
 	if (test_bit(DPS310_SCAN_PRESSURE, scan_mask)) {
-		rc = dps310_read_pres_raw_locked(data);
-		if (rc)
-			return rc;
-
 		/* Pascals, see the channel definition */
 		rc = dps310_calculate_pressure(data, &channels[i++]);
 		if (rc)
@@ -1045,8 +1058,15 @@ static unsigned int dps310_fifo_interval(struct dps310_data *data,
 {
 	unsigned int drain_interval_ms, fill_ms, want_ms;
 	int scan_rate;
+	int rc;
 
 	fill_ms = MSEC_PER_SEC * DPS310_FIFO_DEPTH / (prs_rate + tmp_rate);
+
+	/* Pressure compensation needs a temperature from the start */
+	scoped_guard(mutex, &data->lock)
+		rc = dps310_read_temp_raw_locked(data);
+	if (rc)
+		return rc;
 
 	/*
 	 * There is no hardware watermark, so take it as the number of scans
@@ -1382,11 +1402,12 @@ err:
 	return IRQ_HANDLED;
 }
 
-static void dps310_reset(void *action_data)
+static void dps310_standby(void *action_data)
 {
 	struct dps310_data *data = action_data;
 
-	dps310_reset_wait(data);
+	regmap_write_bits(data->regmap, DPS310_MEAS_CFG,
+			  DPS310_MEAS_CTRL_BITS, 0);
 }
 
 static const struct regmap_config dps310_regmap_config = {
@@ -1440,8 +1461,16 @@ static int dps310_probe(struct i2c_client *client)
 	if (IS_ERR(data->regmap))
 		return PTR_ERR(data->regmap);
 
-	/* Register to run the device reset when the device is removed */
-	rc = devm_add_action_or_reset(dev, dps310_reset, data);
+	rc = devm_add_action_or_reset(dev, dps310_standby, data);
+	if (rc)
+		return rc;
+
+	/* The chip keeps its state across a warm reboot */
+	rc = dps310_reset_wait(data);
+	if (rc)
+		return rc;
+
+	rc = dps310_set_defaults(data);
 	if (rc)
 		return rc;
 

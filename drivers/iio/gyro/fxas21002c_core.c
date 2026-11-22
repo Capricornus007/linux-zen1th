@@ -135,6 +135,13 @@ static const int fxas21002c_range_values[] = {
 	4000, 2000, 1000, 500, 250
 };
 
+enum fxas21002c_channel_index {
+	CHANNEL_SCAN_INDEX_X,
+	CHANNEL_SCAN_INDEX_Y,
+	CHANNEL_SCAN_INDEX_Z,
+	CHANNEL_SCAN_MAX
+};
+
 struct fxas21002c_data {
 	u8 chip_id;
 	enum fxas21002c_mode_state mode;
@@ -154,14 +161,10 @@ struct fxas21002c_data {
 	 * DMA (thus cache coherency maintenance) may require the
 	 * transfer buffers live in their own cache lines.
 	 */
-	s16 buffer[8] __aligned(IIO_DMA_MINALIGN);
-};
-
-enum fxas21002c_channel_index {
-	CHANNEL_SCAN_INDEX_X,
-	CHANNEL_SCAN_INDEX_Y,
-	CHANNEL_SCAN_INDEX_Z,
-	CHANNEL_SCAN_MAX,
+	struct {
+		__be16 chans[CHANNEL_SCAN_MAX];
+		aligned_s64 ts;
+	} scan __aligned(IIO_DMA_MINALIGN);
 };
 
 static int fxas21002c_odr_hz_from_value(struct fxas21002c_data *data, u8 value)
@@ -664,6 +667,11 @@ static const struct iio_chan_spec fxas21002c_channels[] = {
 	FXAS21002C_CHANNEL(Z),
 };
 
+static const unsigned long fxas21002c_scan_masks[] = {
+	BIT(CHANNEL_SCAN_INDEX_X) | BIT(CHANNEL_SCAN_INDEX_Y) | BIT(CHANNEL_SCAN_INDEX_Z),
+	0
+};
+
 static const struct iio_info fxas21002c_info = {
 	.attrs			= &fxas21002c_attrs_group,
 	.read_raw		= &fxas21002c_read_raw,
@@ -684,12 +692,12 @@ static irqreturn_t fxas21002c_trigger_handler(int irq, void *p)
 		goto out_unlock;
 
 	ret = regmap_bulk_read(data->regmap, FXAS21002C_REG_OUT_X_MSB,
-			       data->buffer, CHANNEL_SCAN_MAX * sizeof(s16));
+			       data->scan.chans, sizeof(data->scan.chans));
 	if (ret < 0)
 		goto out_pm_put;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, data->buffer,
-					   data->timestamp);
+	iio_push_to_buffers_with_ts(indio_dev, &data->scan,
+				    sizeof(data->scan), data->timestamp);
 
 out_pm_put:
 	pm_runtime_put_autosuspend(dev);
@@ -920,6 +928,7 @@ int fxas21002c_core_probe(struct device *dev, struct regmap *regmap, int irq,
 
 	indio_dev->channels = fxas21002c_channels;
 	indio_dev->num_channels = ARRAY_SIZE(fxas21002c_channels);
+	indio_dev->available_scan_masks = fxas21002c_scan_masks;
 	indio_dev->name = name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &fxas21002c_info;

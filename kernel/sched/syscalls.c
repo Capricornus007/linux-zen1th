@@ -194,18 +194,6 @@ struct task_struct *idle_task(int cpu)
 	return cpu_rq(cpu)->idle;
 }
 
-#ifdef CONFIG_SCHED_CORE
-int sched_core_idle_cpu(int cpu)
-{
-	struct rq *rq = cpu_rq(cpu);
-
-	if (sched_core_enabled(rq) && rq->curr == rq->idle)
-		return 1;
-
-	return idle_cpu(cpu);
-}
-#endif /* CONFIG_SCHED_CORE */
-
 /**
  * find_process_by_pid - find a process with a matching PID value.
  * @pid: the pid in question.
@@ -489,6 +477,38 @@ req_priv:
 	return 0;
 }
 
+static bool fair_params_changed(struct task_struct *p,
+				const struct sched_attr *attr)
+{
+	if (attr->sched_nice != task_nice(p))
+		return true;
+
+	/* Keep the full update path for PI-boosted and sched_ext tasks. */
+	if (p->sched_class != &fair_sched_class)
+		return true;
+
+	if (!!attr->sched_runtime != !!p->se.custom_slice)
+		return true;
+
+	if (attr->sched_runtime && attr->sched_runtime != p->se.slice)
+		return true;
+
+	if (!attr->sched_runtime &&
+	    p->se.slice != READ_ONCE(sysctl_sched_base_slice))
+		return true;
+
+#ifdef CONFIG_UCLAMP_TASK
+	/* Equal fair parameters do not rule out an implicit clamp reset. */
+	if ((!p->uclamp_req[UCLAMP_MIN].user_defined &&
+	     p->uclamp_req[UCLAMP_MIN].value != uclamp_none(UCLAMP_MIN)) ||
+	    (!p->uclamp_req[UCLAMP_MAX].user_defined &&
+	     p->uclamp_req[UCLAMP_MAX].value != uclamp_none(UCLAMP_MAX)))
+		return true;
+#endif
+
+	return false;
+}
+
 int __sched_setscheduler(struct task_struct *p,
 			 const struct sched_attr *attr,
 			 bool user, bool pi)
@@ -587,9 +607,7 @@ recheck:
 	 * but store a possible modification of reset_on_fork.
 	 */
 	if (unlikely(policy == p->policy)) {
-		if (fair_policy(policy) &&
-		    (attr->sched_nice != task_nice(p) ||
-		     (attr->sched_runtime != p->se.slice)))
+		if (fair_policy(policy) && fair_params_changed(p, attr))
 			goto change;
 		if (rt_policy(policy) && attr->sched_priority != p->rt_priority)
 			goto change;

@@ -192,6 +192,8 @@ static int fuse_direntplus_link(struct file *file,
 		return -EIO;
 	if (fuse_invalid_attr(&o->attr))
 		return -EIO;
+	if (memchr(name.name, '\0', name.len))
+		return -EIO;
 
 	fc = get_fuse_conn(dir);
 	epoch = atomic_read(&fc->epoch);
@@ -228,6 +230,7 @@ retry:
 		fuse_change_attributes(inode, &o->attr, NULL,
 				       ATTR_TIMEOUT(o),
 				       attr_version);
+		fuse_dentry_set_epoch(dentry, epoch);
 		/*
 		 * The other branch comes via fuse_iget()
 		 * which bumps nlookup inside
@@ -242,6 +245,7 @@ retry:
 			return -ENOMEM;
 		}
 
+		fuse_dentry_set_epoch(dentry, epoch);
 		ihold(inode); /* d_splice_alias() eats a reference */
 		alias = d_splice_alias(inode, dentry);
 		d_lookup_done(dentry);
@@ -258,11 +262,12 @@ retry:
 			iput(inode);
 			return PTR_ERR(dentry);
 		}
+		if (alias)
+			fuse_dentry_set_epoch(dentry, epoch);
 		iput(inode);
 	}
 	if (fc->readdirplus_auto)
 		set_bit(FUSE_I_INIT_RDPLUS, &get_fuse_inode(inode)->state);
-	fuse_dentry_set_epoch(dentry, epoch);
 	fuse_change_entry_timeout(dentry, o);
 
 	dput(dentry);

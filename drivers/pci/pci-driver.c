@@ -571,7 +571,6 @@ static void pci_device_shutdown(struct device *dev)
 	 * device to tell it to not continue to do DMA. Don't touch
 	 * devices being preserved for Live Update or in D3cold or
 	 * unknown states.
-	 *
 	 * If it is not a kexec reboot, firmware will hit the PCI
 	 * devices with big hammer and stop their DMA any way.
 	 */

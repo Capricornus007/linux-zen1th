@@ -800,11 +800,11 @@ FIXTURE_TEARDOWN(cap_other_hooks)
 }
 
 /*
- * Creates a ruleset that handles capabilities and allows @cap if @is_allowed,
+ * Creates a ruleset that handles capabilities and allows @cap if @allow_cap,
  * or, if !@handle_caps, a ruleset that only handles a filesystem access right.
  * Returns the ruleset FD, or -1 with errno set.
  */
-static int create_variant_ruleset(const bool handle_caps, const bool is_allowed,
+static int create_variant_ruleset(const bool handle_caps, const bool allow_cap,
 				  const int cap)
 {
 	const struct landlock_ruleset_attr fs_attr = {
@@ -816,7 +816,7 @@ static int create_variant_ruleset(const bool handle_caps, const bool is_allowed,
 		return landlock_create_ruleset(&fs_attr, sizeof(fs_attr), 0);
 
 	ruleset_fd = create_cap_ruleset();
-	if (ruleset_fd < 0 || !is_allowed)
+	if (ruleset_fd < 0 || !allow_cap)
 		return ruleset_fd;
 
 	if (add_cap_rule(ruleset_fd, cap)) {
@@ -909,25 +909,21 @@ TEST_F(cap_other_hooks, mmap_min_addr)
 
 	addr = mmap(low_page, page_size, PROT_READ,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-	EXPECT_EQ(MAP_FAILED, addr);
+	ASSERT_EQ(MAP_FAILED, addr);
 	EXPECT_EQ(EPERM, errno);
 
 	set_cap(_metadata, CAP_SYS_RAWIO);
 	addr = mmap(low_page, page_size, PROT_READ,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 	if (variant->is_allowed) {
-		EXPECT_EQ(low_page, addr)
+		ASSERT_EQ(low_page, addr)
 		{
 			TH_LOG("Failed to map below vm.mmap_min_addr: %s",
 			       strerror(errno));
 		}
-		if (addr != MAP_FAILED)
-			EXPECT_EQ(0, munmap(addr, page_size));
 	} else {
-		EXPECT_EQ(MAP_FAILED, addr);
+		ASSERT_EQ(MAP_FAILED, addr);
 		EXPECT_EQ(EPERM, errno);
-		if (addr != MAP_FAILED)
-			munmap(addr, page_size);
 	}
 	clear_cap(_metadata, CAP_SYS_RAWIO);
 }
@@ -959,7 +955,7 @@ TEST_F(cap_other_hooks, capset_inheritable)
 {
 	enforce_cap_variant(_metadata, variant, CAP_SETPCAP);
 
-	EXPECT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
+	ASSERT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
 	EXPECT_EQ(EPERM, errno);
 
 	set_cap(_metadata, CAP_SETPCAP);
@@ -970,7 +966,7 @@ TEST_F(cap_other_hooks, capset_inheritable)
 			       strerror(errno));
 		}
 	} else {
-		EXPECT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
+		ASSERT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
 		EXPECT_EQ(EPERM, errno);
 	}
 	clear_cap(_metadata, CAP_SETPCAP);
@@ -1107,7 +1103,7 @@ TEST_F(cap_audit, securebits)
 
 		set_cap(_metadata, CAP_SETPCAP);
 		bits = prctl(PR_GET_SECUREBITS);
-		EXPECT_EQ(-1, prctl(PR_SET_SECUREBITS,
+		ASSERT_EQ(-1, prctl(PR_SET_SECUREBITS,
 				    bits | SECBIT_NO_CAP_AMBIENT_RAISE));
 		EXPECT_EQ(EPERM, errno);
 
@@ -1167,7 +1163,7 @@ TEST_F(cap_audit, other_hooks)
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	set_cap(_metadata, CAP_SETPCAP);
-	EXPECT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
+	ASSERT_EQ(-1, add_inheritable_cap(CAP_NET_RAW));
 	EXPECT_EQ(EPERM, errno);
 	clear_cap(_metadata, CAP_SETPCAP);
 	EXPECT_EQ(0, matches_log_cap(self->audit_fd, CAP_SETPCAP));
@@ -1178,7 +1174,7 @@ TEST_F(cap_audit, other_hooks)
 		set_cap(_metadata, CAP_SYS_RAWIO);
 		addr = mmap(low_page, page_size, PROT_READ,
 			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-		EXPECT_EQ(MAP_FAILED, addr);
+		ASSERT_EQ(MAP_FAILED, addr);
 		EXPECT_EQ(EPERM, errno);
 		clear_cap(_metadata, CAP_SYS_RAWIO);
 		EXPECT_EQ(0, matches_log_cap(self->audit_fd, CAP_SYS_RAWIO));
@@ -1187,12 +1183,10 @@ TEST_F(cap_audit, other_hooks)
 	set_cap(_metadata, CAP_SYS_ADMIN);
 	addr = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	EXPECT_NE(MAP_FAILED, addr);
+	ASSERT_NE(MAP_FAILED, addr);
 	clear_cap(_metadata, CAP_SYS_ADMIN);
-	if (addr != MAP_FAILED)
-		EXPECT_EQ(0, munmap(addr, page_size));
 
-	EXPECT_EQ(0, audit_count_records(self->audit_fd, &records));
+	ASSERT_EQ(0, audit_count_records(self->audit_fd, &records));
 	EXPECT_EQ(0, records.access);
 	EXPECT_EQ(0, records.domain);
 }
@@ -1223,13 +1217,11 @@ TEST_F(cap_audit, other_hooks_allowed)
 		set_cap(_metadata, CAP_SYS_RAWIO);
 		addr = mmap(low_page, page_size, PROT_READ,
 			    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-		EXPECT_EQ(low_page, addr);
+		ASSERT_EQ(low_page, addr);
 		clear_cap(_metadata, CAP_SYS_RAWIO);
-		if (addr != MAP_FAILED)
-			EXPECT_EQ(0, munmap(addr, page_size));
 	}
 
-	EXPECT_EQ(0, audit_count_records(self->audit_fd, &records));
+	ASSERT_EQ(0, audit_count_records(self->audit_fd, &records));
 	EXPECT_EQ(0, records.access);
 }
 

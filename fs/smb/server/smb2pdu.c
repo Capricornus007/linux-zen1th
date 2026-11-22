@@ -5271,15 +5271,9 @@ resolve_path:
 						goto err_out;
 					}
 
-					rc = ksmbd_vfs_set_sd_xattr(conn,
-								    idmap,
-								    &path,
-								    pntsd,
-								    pntsd_size);
+					ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
+							       pntsd, pntsd_size);
 					kvfree(pntsd);
-					if (rc)
-						pr_err("failed to store ntacl in xattr : %d\n",
-						       rc);
 				}
 			}
 		}
@@ -8510,11 +8504,13 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 
 	scratch_len = smb_acl_sec_desc_scratch_len(&fattr, ppntsd,
 			ppntsd_size, addition_info);
-	if (!scratch_len || scratch_len == SIZE_MAX) {
+	if (!scratch_len || scratch_len > SIZE_MAX - 7) {
 		rc = -EFBIG;
 		goto release_acl;
 	}
 
+	/* A compound response pads the descriptor to 8 bytes in this buffer */
+	scratch_len = ALIGN(scratch_len, 8);
 	pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
 	if (!pntsd) {
 		rc = -ENOMEM;
@@ -9526,8 +9522,10 @@ err_out:
 		rsp->hdr.Status = STATUS_EA_LIST_INCONSISTENT;
 	else if (rc == -EMSGSIZE)
 		rsp->hdr.Status = STATUS_INFO_LENGTH_MISMATCH;
-	else if (rc == -ENOSPC || rc == -EFBIG)
+	else if (rc == -ENOSPC || rc == -EFBIG || rc == -E2BIG)
 		rsp->hdr.Status = STATUS_DISK_FULL;
+	else if (rc == -ENOMEM)
+		rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 	else if (rc == -ESHARE)
 		rsp->hdr.Status = STATUS_SHARING_VIOLATION;
 	else if (rc == -ENOENT)

@@ -280,9 +280,8 @@ config PCI_LIVEUPDATE
 	  enables PCI devices to run and perform memory transactions
 	  uninterrupted during a kexec for Live Update.
 
-	  This option should only be enabled by users who plan to use Live
-	  Update for kernel upgrades and require preserving PCI devices during
-	  those upgrades.
+	  Say Y if you use Live Update and need to preserve PCI devices
+	  across it.
 
 	  If unsure, say N.
 

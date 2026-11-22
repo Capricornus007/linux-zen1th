@@ -1070,6 +1070,18 @@ static void pci_allocate_acs_save_buffer(struct pci_dev *dev)
 	size_t size;
 	int pos;
 
+	/*
+	 * Devices that rely on device-specific quirks to enable an ACS
+	 * equivalent keep that configuration outside of the ACS Control
+	 * register, so they are configured from scratch on restore. The
+	 * exception is devices preserved across a Live Update, which always
+	 * adopt the ACS controls established by the previous kernel and need
+	 * the buffer to keep them across resets.
+	 */
+	if (pci_need_dev_specific_enable_acs(dev) &&
+	    !pci_liveupdate_was_incoming(dev))
+		return;
+
 	/* dev->acs_cap is not set yet, pci_acs_init() runs later */
 	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
 	if (!pos)
@@ -1125,15 +1137,13 @@ static void pci_restore_acs_state(struct pci_dev *dev)
 	unsigned int i, dwords;
 	int ecv_pos;
 
-	if (dev->acs_cap && !pci_need_dev_specific_enable_acs(dev))
+	if (dev->acs_cap)
 		save_state = pci_find_saved_ext_cap(dev, PCI_EXT_CAP_ID_ACS);
 
 	/*
-	 * Devices that rely on device-specific quirks to enable an ACS
-	 * equivalent keep that configuration outside of the ACS Control
-	 * register, so there is nothing useful to restore for them. Configure
-	 * ACS from scratch instead, which also covers devices that have no
-	 * saved ACS state at all.
+	 * Configure ACS from scratch for devices that have no saved ACS state,
+	 * e.g. devices that rely on device-specific quirks to enable an ACS
+	 * equivalent (see pci_allocate_acs_save_buffer()).
 	 */
 	if (!save_state) {
 		pci_enable_acs(dev);

@@ -107,6 +107,8 @@ unsigned long pagemap_get_pfn(int fd, char *start);
 void clear_softdirty(void);
 bool check_for_pattern(FILE *fp, const char *pattern, char *buf, size_t len);
 uint64_t pmd_psize(void);
+/* temporary cross-tree compatibility thing: */
+#define read_pmd_pagesize() pmd_psize()
 uint64_t pmd_pshift(void);
 unsigned long rss_anon(void);
 bool smaps_has_anon_huge_pages(void *addr);

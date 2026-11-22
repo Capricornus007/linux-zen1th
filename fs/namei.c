@@ -823,8 +823,8 @@ static bool path_connected(struct vfsmount *mnt, struct dentry *dentry)
 {
 	struct super_block *sb = mnt->mnt_sb;
 
-	/* Bind mounts can have disconnected paths */
-	if (mnt->mnt_root == sb->s_root)
+	/* Bind mounts and multi-root filesystems can have disconnected paths */
+	if (!(sb->s_iflags & SB_I_MULTIROOT) && (mnt->mnt_root == sb->s_root))
 		return true;
 
 	return is_subdir(dentry, mnt->mnt_root);
@@ -4287,6 +4287,9 @@ int vfs_create(const struct mnt_idmap *idmap, struct dentry *dentry, umode_t mod
 	if (error)
 		return error;
 
+	if (!dir->i_op->create)
+		return -EOPNOTSUPP;
+
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IALLUGO, S_IFREG);
 	error = security_inode_create(idmap, dir, dentry, mode);
 	if (error)
@@ -5505,6 +5508,10 @@ struct dentry *vfs_mkdir(const struct mnt_idmap *idmap, struct inode *dir,
 
 	error = may_create_dentry(idmap, dir, dentry);
 	if (error)
+		goto err;
+
+	error = -EOPNOTSUPP;
+	if (!dir->i_op->mkdir)
 		goto err;
 
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IRWXUGO | S_ISVTX, S_IFDIR);

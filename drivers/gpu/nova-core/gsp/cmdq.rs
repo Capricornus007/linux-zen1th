@@ -456,10 +456,15 @@ impl GspParsedMessage<'_> {
 /// Provides the ability to send commands and receive messages from the GSP using a shared memory
 /// area.
 #[pin_data]
-pub(crate) struct Cmdq<'cmdq> {
+pub(crate) struct Cmdq<'cmdq>
+where
+    // Hide the mutex's invariant resource lifetime so `Cmdq` remains covariant.
+    exists<'gpu>: 'cmdq,
+{
     /// Inner mutex-protected state.
     #[pin]
-    inner: Mutex<CmdqInner<'cmdq>>,
+    #[uses('gpu: invariant)]
+    inner: Mutex<CmdqInner<'gpu>>,
     /// DMA address of the command queue's shared memory region.
     pub(super) dma_addr: DmaAddress,
 }
@@ -503,6 +508,11 @@ impl<'cmdq> Cmdq<'cmdq> {
         })
     }
 
+    /// Runs `f` with the command queue locked.
+    fn with_inner_locked<R>(&self, f: impl FnOnce(&mut CmdqInner<'_>) -> R) -> R {
+        self.with_inner(|inner| f(&mut inner.lock()))
+    }
+
     /// Computes the checksum for the message pointed to by `it`.
     ///
     /// A message is made of several parts, so `it` is an iterator over byte slices representing
@@ -527,7 +537,7 @@ impl<'cmdq> Cmdq<'cmdq> {
     ///
     /// `EIO` if a message fails framing or checksum validation.
     pub(crate) fn drain(&self) -> Result {
-        self.inner.lock().drain()
+        self.with_inner_locked(|inner| inner.drain())
     }
 }
 
@@ -686,7 +696,7 @@ impl CmdqInner<'_> {
     /// Consumes messages from the queue until a message that satisfies `f` is encountered, and
     /// returns the result of `f`.
     ///
-    /// The message is waited for up to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
+    /// The message is waited for up to `timeout` from the call.
     ///
     /// `f` is expected to return `Ok(Some(_))` with the result to return to the caller, and
     /// `Ok(None)` to signal that the received message was not the one expected (such messages are
@@ -700,9 +710,10 @@ impl CmdqInner<'_> {
     /// - Any error returned by `f`.
     fn await_msg_with<R>(
         &mut self,
+        timeout: Delta,
         f: impl Fn(GspParsedMessage<'_>) -> Result<Option<R>>,
     ) -> Result<R> {
-        let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
+        let deadline = Instant::<Monotonic>::now() + timeout;
         loop {
             let remaining = deadline - Instant::<Monotonic>::now();
             if remaining.is_negative() {

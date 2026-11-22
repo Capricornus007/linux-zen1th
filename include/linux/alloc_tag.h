@@ -138,7 +138,8 @@ static inline bool mem_alloc_profiling_enabled(void)
 
 static inline void alloc_tag_set_inaccurate(struct alloc_tag *tag)
 {
-	atomic_or(CODETAG_FLAG_INACCURATE, &tag->ct.flags);
+	if (tag)
+		atomic_or(CODETAG_FLAG_INACCURATE, &tag->ct.flags);
 }
 
 static inline bool alloc_tag_is_inaccurate(struct alloc_tag *tag)

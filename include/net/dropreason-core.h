@@ -10,7 +10,6 @@
 	FN(SOCKET_FILTER)		\
 	FN(SOCKET_RCVBUFF)		\
 	FN(UNIX_DISCONNECT)		\
-	FN(UNIX_SKIP_OOB)		\
 	FN(PKT_TOO_SMALL)		\
 	FN(TCP_CSUM)			\
 	FN(UDP_CSUM)			\
@@ -98,6 +97,7 @@
 	FN(DUP_FRAG)			\
 	FN(FRAG_REASM_TIMEOUT)		\
 	FN(FRAG_TOO_FAR)		\
+	FN(FRAG_MEM_LIMIT)		\
 	FN(TCP_MINTTL)			\
 	FN(IPV6_BAD_EXTHDR)		\
 	FN(IPV6_TOO_MANY_EXTHDRS)	\
@@ -129,6 +129,7 @@
 	FN(PSP_INPUT)			\
 	FN(PSP_OUTPUT)			\
 	FN(RECURSION_LIMIT)		\
+	FN(SKB_RX_HEADROOM)		\
 	FNe(MAX)
 
 /**
@@ -165,11 +166,6 @@ enum skb_drop_reason {
 	 * during send() that the peer has been close()d.
 	 */
 	SKB_DROP_REASON_UNIX_DISCONNECT,
-	/**
-	 * @SKB_DROP_REASON_UNIX_SKIP_OOB: Out-Of-Band data is skipped by
-	 * recv() without MSG_OOB so dropped.
-	 */
-	SKB_DROP_REASON_UNIX_SKIP_OOB,
 	/** @SKB_DROP_REASON_PKT_TOO_SMALL: packet size is too small */
 	SKB_DROP_REASON_PKT_TOO_SMALL,
 	/** @SKB_DROP_REASON_TCP_CSUM: TCP checksum error */
@@ -494,6 +490,12 @@ enum skb_drop_reason {
 	 */
 	SKB_DROP_REASON_FRAG_TOO_FAR,
 	/**
+	 * @SKB_DROP_REASON_FRAG_MEM_LIMIT: reassembly memory is over the limit.
+	 * (/proc/sys/net/ipv4/ipfrag_high_thresh,
+	 * /proc/sys/net/ipv6/ip6frag_high_thresh)
+	 */
+	SKB_DROP_REASON_FRAG_MEM_LIMIT,
+	/**
 	 * @SKB_DROP_REASON_TCP_MINTTL: ipv4 ttl or ipv6 hoplimit below
 	 * the threshold (IP_MINTTL or IPV6_MINHOPCOUNT).
 	 */
@@ -618,6 +620,11 @@ enum skb_drop_reason {
 	 * itself.
 	 */
 	SKB_DROP_REASON_RECURSION_LIMIT,
+	/**
+	 * @SKB_DROP_REASON_SKB_RX_HEADROOM: accumulated receive headroom
+	 * exceeds the header-offset budget.
+	 */
+	SKB_DROP_REASON_SKB_RX_HEADROOM,
 	/**
 	 * @SKB_DROP_REASON_MAX: the maximum of core drop reasons, which
 	 * shouldn't be used as a real 'reason' - only for tracing code gen

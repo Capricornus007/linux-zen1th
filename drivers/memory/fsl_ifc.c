@@ -229,7 +229,7 @@ static int fsl_ifc_ctrl_probe(struct platform_device *dev)
 
 	dev_info(&dev->dev, "Freescale Integrated Flash Controller\n");
 
-	ctrl = devm_kzalloc_obj(&dev->dev, *fsl_ifc_ctrl_dev);
+	ctrl = devm_kzalloc_obj(&dev->dev, *ctrl);
 	if (!ctrl)
 		return -ENOMEM;
 

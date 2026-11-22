@@ -752,8 +752,10 @@ static bool check_rstbl(const struct RESTART_TABLE *rt, size_t bytes)
 	    rsize + sizeof(struct RESTART_TABLE) > bytes || bytes < ts ||
 	    le16_to_cpu(rt->total) > ne || ff > ts - sizeof(__le32) ||
 	    lf > ts - sizeof(__le32) ||
-	    (ff && ff < sizeof(struct RESTART_TABLE)) ||
-	    (lf && lf < sizeof(struct RESTART_TABLE))) {
+	    (ff && (ff < sizeof(struct RESTART_TABLE) ||
+		     (ff - sizeof(struct RESTART_TABLE)) % rsize)) ||
+	    (lf && (lf < sizeof(struct RESTART_TABLE) ||
+		     (lf - sizeof(struct RESTART_TABLE)) % rsize))) {
 		return false;
 	}
 
@@ -3599,7 +3601,9 @@ move_data:
 		}
 
 		e = Add2Ptr(attr, le16_to_cpu(lrh->attr_off));
-		fname = (struct ATTR_FILE_NAME *)(e + 1);
+		fname = de_get_fname(e);
+		if (!fname)
+			goto dirty_vol;
 		memmove(&fname->dup, data, sizeof(fname->dup)); //
 		mi->dirty = true;
 		break;
@@ -3784,7 +3788,9 @@ move_data:
 			goto dirty_vol;
 		}
 
-		fname = (struct ATTR_FILE_NAME *)(e + 1);
+		fname = de_get_fname(e);
+		if (!fname)
+			goto dirty_vol;
 		memmove(&fname->dup, data, sizeof(fname->dup));
 
 		a_dirty = true;
@@ -4489,7 +4495,8 @@ check_attr_table:
 	rt = Add2Ptr(lrh, t16);
 	oatbl_bytes = rec_len - t16;
 
-	if (!check_rstbl(rt, oatbl_bytes)) {
+	if (le16_to_cpu(rt->size) < bytes_per_attr_entry ||
+	    !check_rstbl(rt, oatbl_bytes)) {
 		err = -EINVAL;
 		goto out;
 	}

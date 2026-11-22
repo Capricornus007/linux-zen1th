@@ -479,8 +479,10 @@ static int cfs_rq_is_idle(struct cfs_rq *cfs_rq)
 
 static int se_is_idle(struct sched_entity *se)
 {
-	if (entity_is_task(se))
-		return task_has_idle_policy(task_of(se));
+	if (entity_is_task(se)) {
+		return task_has_idle_policy(task_of(se)) ||
+			cfs_rq_is_idle(cfs_rq_of(se));
+	}
 	return cfs_rq_is_idle(group_cfs_rq(se));
 }
 
@@ -1660,11 +1662,11 @@ int mm_init_sched(struct mm_struct *mm,
 	int i;
 
 	grp = kzalloc_obj(*grp);
-	if (!grp) {
-		free_percpu(_pcpu_sched);
-		mm->sched_cache_grp = NULL;
-		return -ENOMEM;
-	}
+	if (!grp)
+		goto err_free_pcpu;
+
+	if (!zalloc_cpumask_var(&grp->visited_cpus, GFP_KERNEL))
+		goto err_free_grp;
 
 	for_each_possible_cpu(i) {
 		struct sched_cache_time *pcpu_sched = per_cpu_ptr(_pcpu_sched, i);
@@ -1673,6 +1675,7 @@ int mm_init_sched(struct mm_struct *mm,
 		pcpu_sched->runtime = 0;
 		/* a slightly stale cpu epoch is acceptible */
 		pcpu_sched->epoch = rq->cpu_epoch;
+		pcpu_sched->epoch_last_visit = rq->cpu_epoch;
 		epoch = rq->cpu_epoch;
 	}
 
@@ -1698,6 +1701,14 @@ int mm_init_sched(struct mm_struct *mm,
 	 */
 	smp_store_release(&mm->sched_cache_grp, grp);
 	return 0;
+
+err_free_grp:
+	kfree(grp);
+
+err_free_pcpu:
+	free_percpu(_pcpu_sched);
+	mm->sched_cache_grp = NULL;
+	return -ENOMEM;
 }
 
 static void sched_cache_group_free_rcu(struct rcu_head *rcu)
@@ -1706,6 +1717,7 @@ static void sched_cache_group_free_rcu(struct rcu_head *rcu)
 		container_of(rcu, struct sched_cache_group, rcu);
 
 	free_percpu(grp->pcpu_sched);
+	free_cpumask_var(grp->visited_cpus);
 	kfree(grp);
 }
 
@@ -1846,12 +1858,23 @@ static inline void __update_mm_sched(struct rq *rq,
 	}
 }
 
-static unsigned long fraction_mm_sched(struct rq *rq,
-				       struct sched_cache_time *pcpu_sched)
+static unsigned long fraction_mm_sched(int cpu,
+				       struct sched_cache_group *grp)
 {
+	struct sched_cache_time *pcpu_sched =
+		per_cpu_ptr(grp->pcpu_sched, cpu);
+	struct rq *rq = cpu_rq(cpu);
+
 	guard(raw_spinlock_irqsave)(&rq->cpu_epoch_lock);
 
 	__update_mm_sched(rq, pcpu_sched);
+
+	/* Evict the CPU if this sched group has not run on it for a while */
+	if ((rq->cpu_epoch - pcpu_sched->epoch_last_visit) >
+	    llc_epoch_affinity_timeout) {
+		cpumask_clear_cpu(cpu, grp->visited_cpus);
+		return 0;
+	}
 
 	/*
 	 * Runtime is a geometric series (r=0.5) and as such will sum to twice
@@ -1928,6 +1951,9 @@ void account_mm_sched(struct rq *rq, struct task_struct *p, s64 delta_exec)
 		pcpu_sched->runtime += delta_exec;
 		rq->cpu_runtime += delta_exec;
 		epoch = rq->cpu_epoch;
+		pcpu_sched->epoch_last_visit = epoch;
+		if (!cpumask_test_cpu(cpu_of(rq), grp->visited_cpus))
+			cpumask_set_cpu(cpu_of(rq), grp->visited_cpus);
 	}
 
 	/*
@@ -1978,52 +2004,6 @@ static void task_tick_cache(struct rq *rq, struct task_struct *p)
 	}
 }
 
-static void get_scan_cpumasks(cpumask_var_t cpus, struct task_struct *p,
-			      struct sched_cache_group *grp)
-{
-#ifdef CONFIG_NUMA_BALANCING
-	int cpu, curr_cpu, nid, pref_nid;
-
-	if (!static_branch_likely(&sched_numa_balancing))
-		goto out;
-
-	cpu = READ_ONCE(grp->cpu);
-	if (cpu != -1)
-		nid = cpu_to_node(cpu);
-	curr_cpu = task_cpu(p);
-
-	/*
-	 * Scanning in the preferred NUMA node is ideal. However, the NUMA
-	 * preferred node is per-task rather than per-process. It is possible
-	 * for different threads of the process to have distinct preferred
-	 * nodes; consequently, the process-wide preferred LLC may bounce
-	 * between different nodes. As a workaround, maintain the scan
-	 * CPU mask to also cover the process's current preferred LLC and the
-	 * current running node to mitigate the bouncing risk.
-	 * TBD: numa_group should be considered during task aggregation.
-	 */
-	pref_nid = p->numa_preferred_nid;
-	/* honor the task's preferred node */
-	if (pref_nid == NUMA_NO_NODE)
-		goto out;
-
-	cpumask_or(cpus, cpus, cpumask_of_node(pref_nid));
-
-	/* honor the task's preferred LLC CPU */
-	if (cpu != -1 && !cpumask_test_cpu(cpu, cpus) && nid != NUMA_NO_NODE)
-		cpumask_or(cpus, cpus, cpumask_of_node(nid));
-
-	/* make sure the task's current running node is included */
-	if (!cpumask_test_cpu(curr_cpu, cpus))
-		cpumask_or(cpus, cpus, cpumask_of_node(cpu_to_node(curr_cpu)));
-
-	return;
-
-out:
-#endif
-	cpumask_copy(cpus, cpu_online_mask);
-}
-
 static inline void update_avg_scale(u64 *avg, u64 sample)
 {
 	int factor = per_cpu(sd_llc_size, raw_smp_processor_id());
@@ -2072,7 +2052,7 @@ static void task_cache_work(struct callback_head *work)
 	if (time_before(now, next_scan))
 		return;
 
-	/* only 1 thread is allowed to scan */
+	/* elect a single scanner per epoch */
 	if (!try_cmpxchg(&grp->next_scan, &next_scan,
 			 now + max_t(unsigned long,
 				     READ_ONCE(llc_epoch_period), 1)))
@@ -2093,7 +2073,13 @@ static void task_cache_work(struct callback_head *work)
 	scoped_guard (cpus_read_lock) {
 		guard(rcu)();
 
-		get_scan_cpumasks(cpus, p, grp);
+		/*
+		 * account_mm_sched() can set a bit in visited_cpus while
+		 * it is read here locklessly for efficiency. A CPU missed
+		 * this way has only just been used by this sched group,
+		 * so its share small, and the next scan will include it.
+		 */
+		cpumask_and(cpus, cpu_online_mask, grp->visited_cpus);
 
 		for_each_cpu(cpu, cpus) {
 			/* XXX sched_cluster_active */
@@ -2104,9 +2090,8 @@ static void task_cache_work(struct callback_head *work)
 			if (!sd)
 				continue;
 
-			for_each_cpu(i, sched_domain_span(sd)) {
-				occ = fraction_mm_sched(cpu_rq(i),
-							per_cpu_ptr(grp->pcpu_sched, i));
+			for_each_cpu_and(i, sched_domain_span(sd), cpus) {
+				occ = fraction_mm_sched(i, grp);
 				a_occ += occ;
 				if (occ > m_occ) {
 					m_occ = occ;
@@ -6735,19 +6720,8 @@ static void set_delayed(struct sched_entity *se)
 {
 	struct cfs_rq *cfs_rq;
 
-	/*
-	 * Delayed se of cfs_rq have no tasks queued on them.
-	 * Do not adjust h_nr_runnable since __dequeue_task()
-	 * will account it for blocked tasks.
-	 *
-	 * This check can be removed because when flat pick
-	 * patches get merged as only task can get delayed,
-	 * same for clear_delayed().
-	 */
-	if (!entity_is_task(se)) {
-		se->sched_delayed = 1;
-		return;
-	}
+	/* Only tasks can be delayed. */
+	WARN_ON_ONCE(!entity_is_task(se));
 
 	/*
 	 * Drop a task leaving the runnable set.
@@ -6761,20 +6735,18 @@ static void set_delayed(struct sched_entity *se)
 		cfs_rq->h_nr_runnable--;
 }
 
+static void __clear_delayed(struct sched_entity *se)
+{
+	/* Only tasks can be delayed. */
+	WARN_ON_ONCE(!entity_is_task(se));
+	se->sched_delayed = 0;
+}
+
 static void clear_delayed(struct sched_entity *se)
 {
 	struct cfs_rq *cfs_rq;
 
-	se->sched_delayed = 0;
-
-	/*
-	 * Delayed se of cfs_rq have no tasks queued on them.
-	 * Do not adjust h_nr_runnable since a dequeue has
-	 * already accounted for it or an enqueue of a task
-	 * below it will account for it in enqueue_task_fair().
-	 */
-	if (!entity_is_task(se))
-		return;
+	__clear_delayed(se);
 
 	/*
 	 * Re-add on wake, after sched_delayed is cleared. On a final delayed
@@ -8304,13 +8276,16 @@ requeue_delayed_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags
 static unsigned long enqueue_hierarchy(struct task_struct *p, int flags)
 {
 	unsigned long weight = NICE_0_LOAD;
-	int task_new = !(flags & ENQUEUE_WAKEUP);
 	struct sched_entity *se = &p->se;
 	int h_nr_idle = task_has_idle_policy(p);
 	int h_nr_runnable = 1;
 	struct cfs_rq *cfs_rq;
 
-	if (task_new && se->sched_delayed)
+	/*
+	 * Accounted via requeue_delayed_entity() calling
+	 * clear_delayed() when delayed task wakes up.
+	 */
+	if (se->sched_delayed)
 		h_nr_runnable = 0;
 
 	for_each_sched_entity(se, cfs_rq) {
@@ -8385,6 +8360,9 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		return;
 	}
 
+	/* Wakeup of delayed tasks must be handled above. */
+	WARN_ON_ONCE(!task_new && se->sched_delayed);
+
 	/*
 	 * If in_iowait is set, the code below may not trigger any cpufreq
 	 * utilization updates, so do it here explicitly with the IOWAIT flag
@@ -8401,9 +8379,6 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	 */
 	if (curr)
 		place_entity(cfs_rq, se, flags);
-
-	if (se->on_rq && se->sched_delayed)
-		requeue_delayed_entity(cfs_rq, se, flags);
 
 	weight = enqueue_hierarchy(p, flags);
 
@@ -8444,16 +8419,15 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 static void dequeue_hierarchy(struct task_struct *p, int flags)
 {
 	struct sched_entity *se = &p->se;
-	bool task_sleep = flags & DEQUEUE_SLEEP;
-	bool task_delayed = flags & DEQUEUE_DELAYED;
 	bool task_throttled = flags & DEQUEUE_THROTTLE;
 	int h_nr_idle = task_has_idle_policy(p);
 	int h_nr_runnable = 0;
 	struct cfs_rq *cfs_rq;
 	bool dequeue = true;
 
-	if (task_sleep || task_delayed || !se->sched_delayed)
-		h_nr_runnable = 1;
+	/* Already accounted via set_delayed(). */
+	if (se->sched_delayed)
+		h_nr_runnable = 0;
 
 	for_each_sched_entity(se, cfs_rq) {
 		update_curr(cfs_rq);
@@ -8544,7 +8518,11 @@ static bool __dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 		rq->next_balance = jiffies;
 
 	if (task_delayed) {
-		clear_delayed(se);
+		/*
+		 * Skip accounting since set_delayed() has already
+		 * adjusted it. Just clear se->sched_delayed.
+		 */
+		__clear_delayed(se);
 
 		WARN_ON_ONCE(!task_sleep);
 		WARN_ON_ONCE(p->on_rq != 1);
@@ -15888,19 +15866,20 @@ err:
 
 void online_fair_sched_group(struct task_group *tg)
 {
-	struct sched_entity *se;
-	struct rq_flags rf;
-	struct rq *rq;
 	int i;
 
 	for_each_possible_cpu(i) {
-		rq = cpu_rq(i);
-		se = tg_se(tg, i);
-		rq_lock_irq(rq, &rf);
+		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, i);
+		struct sched_entity *se = tg_se(tg, i);
+		struct rq *rq = cpu_rq(i);
+
+		guard(rq_lock_irq)(rq);
+
 		update_rq_clock(rq);
 		attach_entity_cfs_rq(se);
 		sync_throttle(tg, i);
-		rq_unlock_irq(rq, &rf);
+
+		cfs_rq->idle = tg_cfs_rq(tg->parent, i)->idle;
 	}
 }
 
@@ -15957,13 +15936,11 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	se->parent = parent;
 }
 
-static DEFINE_MUTEX(shares_mutex);
-
 static int __sched_group_set_shares(struct task_group *tg, unsigned long shares)
 {
 	int i;
 
-	lockdep_assert_held(&shares_mutex);
+	lockdep_assert_held(&cpu_weight_mutex);
 
 	/*
 	 * We can't change the weight of the root cgroup.
@@ -15998,23 +15975,66 @@ static int __sched_group_set_shares(struct task_group *tg, unsigned long shares)
 	return 0;
 }
 
-int sched_group_set_shares(struct task_group *tg, unsigned long shares)
+int sched_group_set_shares_locked(struct task_group *tg, unsigned long shares)
 {
 	int ret;
 
-	mutex_lock(&shares_mutex);
+	lockdep_assert_held(&cpu_weight_mutex);
+
 	if (tg_is_idle(tg))
 		ret = -EINVAL;
 	else
 		ret = __sched_group_set_shares(tg, shares);
-	mutex_unlock(&shares_mutex);
 
 	return ret;
+}
+
+struct tg_set_idle_struct {
+	long idle;
+	int cpu;
+};
+
+static int tg_set_idle_up(struct task_group *tg, void *data)
+{
+	struct tg_set_idle_struct *tsi = data;
+	struct cfs_rq *cfs_rq, *grp_cfs_rq = tg_cfs_rq(tg, tsi->cpu);
+	struct sched_entity *se = tg_se(tg, tsi->cpu);
+	int old_idle = grp_cfs_rq->idle;
+	int task_delta;
+
+	grp_cfs_rq->idle += tsi->idle;
+
+	if (!!old_idle == !!grp_cfs_rq->idle)
+		return 0;
+
+	task_delta = grp_cfs_rq->h_nr_queued - grp_cfs_rq->h_nr_idle;
+	if (!task_delta)
+		return 0;
+
+	task_delta *= tsi->idle;
+	for_each_sched_entity(se, cfs_rq) {
+		if (!se->on_rq)
+			break;
+
+		cfs_rq->h_nr_idle += task_delta;
+
+		if (cfs_rq_is_idle(cfs_rq))
+			break;
+	}
+	return 0;
+}
+
+int sched_group_set_shares(struct task_group *tg, unsigned long shares)
+{
+	guard(mutex)(&cpu_weight_mutex);
+	return sched_group_set_shares_locked(tg, shares);
 }
 
 int sched_group_set_idle(struct task_group *tg, long idle)
 {
 	int i;
+
+	lockdep_assert_held(&cpu_weight_mutex);
 
 	if (tg == &root_task_group)
 		return -EINVAL;
@@ -16022,48 +16042,21 @@ int sched_group_set_idle(struct task_group *tg, long idle)
 	if (idle < 0 || idle > 1)
 		return -EINVAL;
 
-	mutex_lock(&shares_mutex);
-
-	if (tg->idle == idle) {
-		mutex_unlock(&shares_mutex);
+	if (tg->idle == idle)
 		return 0;
-	}
 
 	tg->idle = idle;
 
 	for_each_possible_cpu(i) {
 		struct rq *rq = cpu_rq(i);
-		struct sched_entity *se = tg_se(tg, i);
-		struct cfs_rq *grp_cfs_rq = tg_cfs_rq(tg, i);
-		bool was_idle = cfs_rq_is_idle(grp_cfs_rq);
-		struct cfs_rq *cfs_rq;
-		long idle_task_delta;
-		struct rq_flags rf;
 
-		rq_lock_irqsave(rq, &rf);
+		guard(rq_lock_irqsave)(rq);
 
-		grp_cfs_rq->idle = idle;
-		if (WARN_ON_ONCE(was_idle == cfs_rq_is_idle(grp_cfs_rq)))
-			goto next_cpu;
-
-		idle_task_delta = grp_cfs_rq->h_nr_queued -
-				  grp_cfs_rq->h_nr_idle;
-		if (!cfs_rq_is_idle(grp_cfs_rq))
-			idle_task_delta *= -1;
-
-		for_each_sched_entity(se, cfs_rq) {
-			if (!se->on_rq)
-				break;
-
-			cfs_rq->h_nr_idle += idle_task_delta;
-
-			/* Already accounted at parent level and above. */
-			if (cfs_rq_is_idle(cfs_rq))
-				break;
-		}
-
-next_cpu:
-		rq_unlock_irqrestore(rq, &rf);
+		struct tg_set_idle_struct tsi = {
+			.idle = idle ? 1 : -1,
+			.cpu = i,
+		};
+		walk_tg_tree_from(tg, tg_nop, tg_set_idle_up, &tsi);
 	}
 
 	/* Idle groups have minimum weight. */
@@ -16072,7 +16065,6 @@ next_cpu:
 	else
 		__sched_group_set_shares(tg, NICE_0_LOAD);
 
-	mutex_unlock(&shares_mutex);
 	return 0;
 }
 

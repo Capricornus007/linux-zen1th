@@ -127,6 +127,8 @@ static int xe_file_open(struct drm_device *dev, struct drm_file *file)
 		put_task_struct(task);
 	}
 
+	xe_debugfs_client_add(file);
+
 	return 0;
 }
 
@@ -1069,6 +1071,9 @@ int xe_device_probe(struct xe_device *xe)
 	if (err)
 		return err;
 
+	for_each_gt(gt, xe, id)
+		xe_gt_sanitize_freq(gt);
+
 	xe_display_register(xe);
 
 	err = xe_oa_register(xe);
@@ -1092,9 +1097,6 @@ int xe_device_probe(struct xe_device *xe)
 	err = xe_i2c_probe(xe);
 	if (err)
 		goto err_unregister_display;
-
-	for_each_gt(gt, xe, id)
-		xe_gt_sanitize_freq(gt);
 
 	xe_vsec_init(xe);
 

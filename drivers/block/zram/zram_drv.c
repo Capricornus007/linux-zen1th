@@ -1,15 +1,9 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
 /*
  * Compressed RAM block device
  *
  * Copyright (C) 2008, 2009, 2010  Nitin Gupta
  *               2012, 2013 Minchan Kim
- *
- * This code is released using a dual license strategy: BSD/GPL
- * You can choose the licence that better fits your requirements.
- *
- * Released under the terms of 3-clause BSD License
- * Released under the terms of GNU General Public License Version 2.0
- *
  */
 
 #define pr_fmt(fmt) "zram: " fmt
@@ -1215,6 +1209,9 @@ static void scan_slots_for_writeback(struct zram *zram, u32 mode,
 
 		slot_lock(zram, index);
 		if (!slot_allocated(zram, index))
+			goto next;
+
+		if (test_slot_flag(zram, index, ZRAM_PP_SLOT))
 			goto next;
 
 		if (test_slot_flag(zram, index, ZRAM_WB) ||
