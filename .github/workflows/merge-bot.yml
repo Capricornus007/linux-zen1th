@@ -36,7 +36,8 @@ jobs:
           # /tmp，後面用絕對路徑取用（run #44 實測：相對路徑 [ -f ] 失敗，
           # 退回官方 patch 又在 fair.c Hunk#19 撞 3way 衝突）。
           mkdir -p /tmp/bore-adapted
-          cp -f patches/bore-adapted-*.patch /tmp/bore-adapted/ 2>/dev/null || true
+          # checkout 用 path: meta，故此處 cwd 是倉庫根，補丁在 meta/patches/（run #45 實測：寫 patches/ 會靜默失敗）
+          cp -f meta/patches/bore-adapted-*.patch /tmp/bore-adapted/ 2>/dev/null || true
           cd meta
           # （旧的「增量：整合分支←next 尖端」路徑已刪除——zen1th 現在是無上游歷史的
           #   單提交快照分支，沒有共同祖先可 merge；且全量重組只要 ~10 分鐘，每日全量。）
