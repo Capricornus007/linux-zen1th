@@ -244,16 +244,16 @@ jobs:
           #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
           apply_diff /tmp/xan.diff "xanmod 優化" no
 
-          # 2026-11-24 修源頭：舊的 Capricornus007 fork cjktty-7.4-rc1.patch 是
+          # 2026-11-24 修源頭：舊的 cjktty-7.4-rc1.patch（full）是
           # 「full」補丁（code＋32x32 字型合一，57MB），對 next 7.4-rc4 全 hunk 失敗。
-          # 權威 gentoo-zh/cjktty-patches SUPPORTED.md 明確記載：
+          # 上游 gentoo-zh/cjktty-patches SUPPORTED.md 明確記載（本倉已同步其 split 補丁，commit 7ee51f8）：
           #   | 7.4 (mainline) | 7.4-rc4 | | v7.x/cjktty-code-7.4-rc3.patch | Split ✓ |
           # 即 rc4 用 rc3 的 code 補丁（7.4 把 fbcon_fill_cursor_mask() 換成
           # fbcon_cursor_glyph()，code 補丁的 font_bits() context 已更新）。
           # split 方案：code 補丁（33KB，含 CJK 邏輯＋16x16/32x32 .c 資料＋
           # Kconfig/Makefile/fonts.c）＋ font-unifont-18 補丁（12MB，提供
           # font_cjk_16x16.h / font_cjk_32x32.h 宣告）。功能完全覆蓋舊 full 補丁。
-          CJ=https://raw.githubusercontent.com/gentoo-zh/cjktty-patches/master
+          CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
           curl -fsSL -o /tmp/cj-code.patch "$CJ/v7.x/cjktty-code-7.4-rc3.patch"
           curl -fsSL -o /tmp/cj-font.patch "$CJ/cjktty-font-unifont-18.0.01.patch"
           _cj_code_sz=$(wc -c < /tmp/cj-code.patch)
