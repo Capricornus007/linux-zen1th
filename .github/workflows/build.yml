@@ -24,11 +24,33 @@ jobs:
     timeout-minutes: 300
     steps:
       - name: 系統準備
+        if: steps.check.outputs.skip != 'true'
         run: |
           echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch' > /etc/pacman.d/mirrorlist
           pacman -Syu --noconfirm --needed base-devel git bc flex bison openssl python perl rsync cpio zstd libtraceevent pahole
           useradd -m builder
+      - name: 定时触发先查版本（未变则跳过，避免每 3 小时白编 150 分钟）
+        id: check
+        if: github.event_name == 'schedule'
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          set -euo pipefail
+          # 远端 zen1th-repo 的 DB 裡最新 pkgver vs 整合分支 PKGBUILD 的 pkgver。
+          # 相同代表 merge-bot 這 3 小時沒產出新核心 ⇒ 直接跳過，省 CPU/分鐘數。
+          remote=$(curl -fsSL --max-time 30 \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/zen1th-repo" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((a["name"] for a in d.get("assets",[]) if a["name"].startswith("linux-zen1th-") and "headers" not in a["name"]), ""))' 2>/dev/null || true)
+          version=$(grep -E '^pkgver=' PKGBUILD 2>/dev/null | head -1 | cut -d= -f2 || true)
+          echo "远端包: ${remote:-无} / 本轮 pkgver: ${version:-无}"
+          if [ -n "$remote" ] && [ -n "$version" ] && [[ "$remote" == *"-$version-"* ]]; then
+            echo "版本未变，跳过本轮定时构建"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: 取整合分支
+        if: steps.check.outputs.skip != 'true'
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           # 倉是 private：匿名 clone 會要憑證（run 42419179952 實測 exit 128）。
@@ -38,6 +60,7 @@ jobs:
           git -C /home/builder/src remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           chown -R builder:builder /home/builder/src
       - name: git 憑證改寫（private 倉）
+        if: steps.check.outputs.skip != 'true'
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           # pacman 7.1 的 makepkg 對 git 來源下載封死一般 config 層
@@ -48,9 +71,11 @@ jobs:
           git config -f /etc/makepkg.d/gitconfig url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
           git config -f /etc/makepkg.d/gitconfig --get-regexp insteadOf
       - name: makepkg
+        if: steps.check.outputs.skip != 'true'
         run: |
           su builder -c 'cd /home/builder/src && HOME=/home/builder JOBS=$(nproc) makepkg -fs --noconfirm'
       - name: 產物自檢（收口：壞包就紅，不發假包）
+        if: steps.check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -90,16 +115,19 @@ jobs:
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
       - name: 清理 current-kernel 旧资源（current 只留最新一对）
+        if: steps.check.outputs.skip != 'true'
         run: |
           cd /home/builder/src
           python3 ci/release-manage.py clean-current
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: SHA256SUMS
+        if: steps.check.outputs.skip != 'true'
         run: |
           cd /home/builder/src
           sha256sum linux-zen1th-*.pkg.tar.zst > SHA256SUMS-kernel
       - name: 發佈到 current-kernel release（仅本次最新一对 + SHA256）
+        if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: current-kernel
@@ -115,6 +143,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 建立 zen1th pacman 仓库 DB（repo-add，本仓直接可供 pacman -Syu）
+        if: steps.check.outputs.skip != 'true'
         run: |
           cd /home/builder/src
           set -euo pipefail
@@ -130,6 +159,7 @@ jobs:
           tar -tzf zen1th.db.tar.gz | grep -q '^linux-zen1th-[0-9]' || { echo "DB 缺 kernel"; exit 1; }
           tar -tzf zen1th.db.tar.gz | grep -q '^linux-zen1th-headers-[0-9]' || { echo "DB 缺 headers"; exit 1; }
       - name: 发布 zen1th pacman 仓库（zen1th-repo tag，latest tag 唯一）
+        if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: zen1th-repo
@@ -151,6 +181,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 清理 zen1th-repo 旧资源（只留最新一組 + DB）
+        if: steps.check.outputs.skip != 'true'
         run: |
           # softprops 更新 release 不会删旧 asset；列举后删掉非本轮文件名。
           cd /home/builder/src
@@ -166,6 +197,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 历史版本归档（每个版本单独 tag）
+        if: steps.check.outputs.skip != 'true'
         run: |
           cd /home/builder/src
           # 从包名提取版本 tag：linux-zen1th-<ver>-1-x86_64.pkg.tar.zst → zen1th-<ver>
