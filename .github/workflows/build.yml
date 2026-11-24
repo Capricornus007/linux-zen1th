@@ -3,8 +3,19 @@ on:
   repository_dispatch:
     types: [integration-ready]
   workflow_dispatch:
+  # 2026-11-25 用戶要求：zen1th 脫離自動構建倉（repo/current-repo），
+  # 由本倉自己每 3 小時檢查 + 構建 + 發佈成 pacman 可直接吃的倉庫 release。
+  # merge-bot 每輪整合會推 zen1th 快照分支；本 workflow 的「版本未變即跳過」
+  # 步驟保證定時觸發不會對同一版本重做 150 分鐘的內核編譯。
+  schedule:
+    - cron: '0 */3 * * *'
 permissions:
   contents: write
+concurrency:
+  group: zen1th-build
+  # 定時觸發排队等前一輪跑完（內核編譯 150 分鐘 > 3 小時間隔時也不互相掐死）；
+  # 手動/dispatch 則取代舊的。
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 jobs:
   pkg:
     runs-on: ubuntu-latest
@@ -103,6 +114,57 @@ jobs:
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 建立 zen1th pacman 仓库 DB（repo-add，本仓直接可供 pacman -Syu）
+        run: |
+          cd /home/builder/src
+          set -euo pipefail
+          # 2026-11-25 用户要求：zen1th 从 repo/current-repo 拆出，
+          # 本仓自己发布一个 pacman 可直接吃的仓库 release（zen1th-repo）。
+          mkdir -p deploy
+          cp linux-zen1th-*.pkg.tar.zst deploy/
+          cd deploy
+          # repo-add -R 先移除旧同名条目再加入；DB 只含本轮最新一对。
+          repo-add -R -p zen1th.db.tar.gz ./*.pkg.tar.zst
+          ls -lh zen1th.db* zen1th.files* *.pkg.tar.zst
+          # 自检：DB 必须有 kernel + headers 两条。
+          tar -tzf zen1th.db.tar.gz | grep -q '^linux-zen1th-[0-9]' || { echo "DB 缺 kernel"; exit 1; }
+          tar -tzf zen1th.db.tar.gz | grep -q '^linux-zen1th-headers-[0-9]' || { echo "DB 缺 headers"; exit 1; }
+      - name: 发布 zen1th pacman 仓库（zen1th-repo tag，latest tag 唯一）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zen1th-repo
+          name: zen1th pacman repository（每 3 小时自动检查，只留最新核心）
+          body: |
+            linux-zen1th 自建 pacman 仓库。pacman.conf 加：
+            [zen1th]
+            Server = https://github.com/Capricornus007/linux-zen1th/releases/download/zen1th-repo
+            SigLevel = Never
+            本 release 即 latest（历史 tag make_latest=false），顺应「github latest tag 只留最新」决定。
+          files: |
+            /home/builder/src/deploy/zen1th.db.tar.gz
+            /home/builder/src/deploy/zen1th.db
+            /home/builder/src/deploy/zen1th.files.tar.gz
+            /home/builder/src/deploy/zen1th.files
+            /home/builder/src/deploy/linux-zen1th-*.pkg.tar.zst
+            /home/builder/src/SHA256SUMS-kernel
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 清理 zen1th-repo 旧资源（只留最新一組 + DB）
+        run: |
+          # softprops 更新 release 不会删旧 asset；列举后删掉非本轮文件名。
+          cd /home/builder/src
+          KEEP=$(basename $(ls linux-zen1th-[0-9]*.pkg.tar.zst | head -1))
+          HOLD=$(basename $(ls linux-zen1th-headers-[0-9]*.pkg.tar.zst | head -1))
+          for a in $(gh api repos/${GITHUB_REPOSITORY}/releases/tags/zen1th-repo \
+                       --jq '.assets[].name' 2>/dev/null); do
+            case "$a" in
+              "$KEEP"|"$HOLD"|zen1th.db*|zen1th.files*|SHA256SUMS-kernel) ;;
+              *) gh release delete-asset zen1th-repo "$a" --repo "${GITHUB_REPOSITORY}" -y >/dev/null 2>&1 && echo "删旧 $a" ;;
+            esac
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 历史版本归档（每个版本单独 tag）
         run: |
           cd /home/builder/src
