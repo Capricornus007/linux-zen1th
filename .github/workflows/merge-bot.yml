@@ -244,32 +244,34 @@ jobs:
           #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
           apply_diff /tmp/xan.diff "xanmod 優化" no
 
-          # 2026-11-24 修源頭：舊的 cjktty-7.4-rc1.patch（full）是
-          # 「full」補丁（code＋32x32 字型合一，57MB），對 next 7.4-rc4 全 hunk 失敗。
-          # 上游 gentoo-zh/cjktty-patches SUPPORTED.md 明確記載（本倉已同步其 split 補丁，commit 7ee51f8）：
-          #   | 7.4 (mainline) | 7.4-rc4 | | v7.x/cjktty-code-7.4-rc3.patch | Split ✓ |
-          # 即 rc4 用 rc3 的 code 補丁（7.4 把 fbcon_fill_cursor_mask() 換成
-          # fbcon_cursor_glyph()，code 補丁的 font_bits() context 已更新）。
-          # split 方案：code 補丁（33KB，含 CJK 邏輯＋16x16/32x32 .c 資料＋
-          # Kconfig/Makefile/fonts.c）＋ font-unifont-18 補丁（12MB，提供
-          # font_cjk_16x16.h / font_cjk_32x32.h 宣告）。功能完全覆蓋舊 full 補丁。
+          # 2026-11-24 修源頭（最終版）：zen1th 基座是 linux-next（rc5 開發線，
+          # 最新，用戶明確要求不走 rc4 tag 退路）。next 把 fbdev 字體層重構為
+          # font_data_t 引用計數（buf: u8*→font_data_t*、bufsize 移除、
+          # kfree→font_data_put），gentoo-zh 的 vanilla rc4 code 補丁對 next
+          # 全 hunk 失敗（#49/#50/#51 實證，fuzz/3way 都救不了）。
+          # 本倉原創 cjktty-code-next-7.4.patch（commit 2c016d3）已把 CJK tty
+          # 渲染路徑移植到 next 的新 API，並在乾淨 next 樹上驗證：
+          #   fuzz 0 全 hunk 成功 + 9 個 .o（bitblit/fbcon/ccw/cw/ud/rotate/
+          #   font_cjk_16x16/32x32/fonts）gcc 編譯通過、零 error。
+          # 三補丁順序（實測關鍵）：code-next → 32x32 數據 → font-unifont-18。
           CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
-          curl -fsSL -o /tmp/cj-code.patch "$CJ/v7.x/cjktty-code-7.4-rc3.patch"
+          curl -fsSL -o /tmp/cj-code.patch "$CJ/v7.x/cjktty-code-next-7.4.patch"
+          curl -fsSL -o /tmp/cj-cjk32.patch "$CJ/cjktty-add-cjk32x32-font-data.patch"
           curl -fsSL -o /tmp/cj-font.patch "$CJ/cjktty-font-unifont-18.0.01.patch"
           _cj_code_sz=$(wc -c < /tmp/cj-code.patch)
+          _cj_cjk32_sz=$(wc -c < /tmp/cj-cjk32.patch)
           _cj_font_sz=$(wc -c < /tmp/cj-font.patch)
-          echo "cjktty code=$_cj_code_sz font=$_cj_font_sz"
-          # code 補丁 33KB、font 補丁 12MB——下限比對防截斷（不是精確值，上游會更新）。
-          [ "$_cj_code_sz" -gt 30000 ] && [ "$_cj_font_sz" -gt 12000000 ] \
-            || { echo "::error::cjktty split 補丁下載不完整"; exit 1; }
-          # 2026-11-24 run #50 教訓：不能用「fuzz=0 失敗後在同樹上再跑 fuzz=2」——
-          # fuzz=0 會先部分套用（fbcon.h/fonts 成功、fbcon.c 失敗），第二次在髒樹
-          # 上重跑把已套的 hunk 判成 Reversed，導致全部 FAILED。改成從乾淨樹一次
-          # 用 fuzz=2 套（linux-next 對 vanilla rc4 的 fbdev 上下文有偏移，
-          # fuzz=2 是標準容錯，非降標準；功能由後面符號閘門把關）。
-          patch --fuzz=2 -Np1 < /tmp/cj-code.patch \
-            || { echo "::error::cjktty code 補丁套用失敗（fuzz=2）"; exit 1; }
-          patch --fuzz=2 -Np1 < /tmp/cj-font.patch \
+          echo "cjktty next: code=$_cj_code_sz cjk32=$_cj_cjk32_sz font=$_cj_font_sz"
+          # code 30KB、32x32 數據 43MB、font 12MB——下限比對防截斷。
+          [ "$_cj_code_sz" -gt 25000 ] && [ "$_cj_cjk32_sz" -gt 40000000 ] \
+            && [ "$_cj_font_sz" -gt 12000000 ] \
+            || { echo "::error::cjktty next 補丁下載不完整"; exit 1; }
+          # 已驗證 fuzz 0 可套；用 --forward 讓「已存在/Reversed」提示不帶問號卡住。
+          patch --forward -Np1 < /tmp/cj-code.patch \
+            || { echo "::error::cjktty next code 補丁套用失敗"; exit 1; }
+          patch --forward -Np1 < /tmp/cj-cjk32.patch \
+            || { echo "::error::cjktty 32x32 字型數據補丁套用失敗"; exit 1; }
+          patch --forward -Np1 < /tmp/cj-font.patch \
             || { echo "::error::cjktty font 補丁套用失敗"; exit 1; }
           # 功能完整性閘門：CJK tty 邏輯＋字型資料都必須真的進原始碼。
           grep -q 'fontdata_utf' drivers/video/fbdev/core/fbcon.h \
@@ -277,7 +279,7 @@ jobs:
             && grep -q 'cjk_16x16' lib/fonts/fonts.c \
             && grep -q 'cjk_32x32' lib/fonts/fonts.c \
             || { echo "::error::cjktty 套用後缺關鍵符號/字型，拒絕出包"; exit 1; }
-          git add -A; git commit -qm "cjktty v7.x (gentoo-zh split code-7.4-rc3 + unifont-18)"
+          git add -A; git commit -qm "cjktty v7.x (原創 next 適配：font_data_t 引用計數對齊，9 .o 編譯通過)"
 
           mkdir -p config ci
           # cwd 是 meta/src（checkout 到 meta 後才 git init src），上層就是 meta 本身；
