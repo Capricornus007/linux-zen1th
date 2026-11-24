@@ -100,10 +100,20 @@ def main():
             print(f"归档 release {tag} 已存在，追加文件")
         rid = rel["id"]
         for f in files:
+            name = os.path.basename(f)
+            # 2026-11-25 修幂等：重跑同一版本時 archive tag 已存在、同名 asset 也在，
+            # 直接上傳會 422 already_exists 讓整個 build 紅（run 45475856476 實測）。
+            # 先刪同名舊 asset 再傳，與 clean-current 的「只留最新」語意一致。
+            for a in rel.get("assets", []):
+                if a.get("name") == name:
+                    delete_asset(a["id"])
+                    print(f"  刪同名舊 asset：{name}")
             ok, msg = upload_asset(rid, f)
-            print(f"  上传 {os.path.basename(f)}: {'OK' if ok else 'FAIL ' + msg}")
+            print(f"  上传 {name}: {'OK' if ok else 'FAIL ' + msg}")
             if not ok:
                 sys.exit(1)
+            # 上傳成功後同步本地 assets 清單，避免同名多份殘留判斷失效。
+            rel = get_release(tag)
     else:
         print(f"未知动作：{action}")
         sys.exit(2)
