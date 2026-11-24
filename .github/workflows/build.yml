@@ -94,9 +94,11 @@ jobs:
           tag_name: current-kernel
           name: linux-zen1th current（UTC+8 自動重建）
           body: merge-bot 整合完成自動構建。current 只保留最新一對，歷史見各版本 tag。SHA256 見附檔。
+          # 2026-11-24 修源頭：本 CI 從無 GPG 簽名步驟、也無簽名 secret，
+          # *.sig 從未生成；本機 /etc/pacman.conf 是 SigLevel=Never，自建倉不依赖簽名。
+          # 去掉不存在的 .sig glob，避免 release 附檔列表含幽靈項。
           files: |
             /home/builder/src/linux-zen1th-*.pkg.tar.zst
-            /home/builder/src/linux-zen1th-*.pkg.tar.zst.sig
             /home/builder/src/SHA256SUMS-kernel
           make_latest: false
         env:
@@ -109,7 +111,10 @@ jobs:
           VER=$(printf '%s' "$P" | sed -E 's/^linux-zen1th-(.+)-1-x86_64\.pkg\.tar\.zst$/\1/')
           TAG="zen1th-${VER}"
           echo "归档 tag: $TAG"
-          python3 ci/release-manage.py archive "$TAG" \
-            linux-zen1th-*.pkg.tar.zst linux-zen1th-*.pkg.tar.zst.sig SHA256SUMS-kernel
+          # 只把實際存在的檔案傳給 archive：release-manage.py 對不存在檔案
+          # 會 ::error:: + exit 1。*.sig 從未生成（無 GPG 步驟/SigLevel=Never），
+          # 之前就是把字面 glob 傳進去才讓整個歸檔步驟紅燈（run 45333187989）。
+          FILES=$(ls linux-zen1th-[0-9]*.pkg.tar.zst SHA256SUMS-kernel 2>/dev/null)
+          python3 ci/release-manage.py archive "$TAG" $FILES
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
