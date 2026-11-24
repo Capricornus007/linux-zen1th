@@ -262,12 +262,14 @@ jobs:
           # code 補丁 33KB、font 補丁 12MB——下限比對防截斷（不是精確值，上游會更新）。
           [ "$_cj_code_sz" -gt 30000 ] && [ "$_cj_font_sz" -gt 12000000 ] \
             || { echo "::error::cjktty split 補丁下載不完整"; exit 1; }
-          # 上游保證 vanilla rc4 fuzz 0 可套；linux-next 若漂移，fuzz=2 是上下文
-          # 行偏移的標準容錯（非降標準，功能由後面符號閘門把關）。
-          patch -Np1 < /tmp/cj-code.patch \
-            || { echo "cjktty code fuzz=0 衝突，試 fuzz=2"; patch --fuzz=2 -Np1 < /tmp/cj-code.patch; } \
-            || { echo "::error::cjktty code 補丁套用失敗（上游 rc4 應 fuzz 0 可套）"; exit 1; }
-          patch -Np1 < /tmp/cj-font.patch \
+          # 2026-11-24 run #50 教訓：不能用「fuzz=0 失敗後在同樹上再跑 fuzz=2」——
+          # fuzz=0 會先部分套用（fbcon.h/fonts 成功、fbcon.c 失敗），第二次在髒樹
+          # 上重跑把已套的 hunk 判成 Reversed，導致全部 FAILED。改成從乾淨樹一次
+          # 用 fuzz=2 套（linux-next 對 vanilla rc4 的 fbdev 上下文有偏移，
+          # fuzz=2 是標準容錯，非降標準；功能由後面符號閘門把關）。
+          patch --fuzz=2 -Np1 < /tmp/cj-code.patch \
+            || { echo "::error::cjktty code 補丁套用失敗（fuzz=2）"; exit 1; }
+          patch --fuzz=2 -Np1 < /tmp/cj-font.patch \
             || { echo "::error::cjktty font 補丁套用失敗"; exit 1; }
           # 功能完整性閘門：CJK tty 邏輯＋字型資料都必須真的進原始碼。
           grep -q 'fontdata_utf' drivers/video/fbdev/core/fbcon.h \
