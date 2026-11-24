@@ -244,36 +244,38 @@ jobs:
           #        （run 42394838953：binder/tcp/vmscan 17 檔）。最佳努力保留。
           apply_diff /tmp/xan.diff "xanmod 優化" no
 
-          CJ=https://raw.githubusercontent.com/Capricornus007/cjktty-patches/master
-          # v7.x/cjktty-7.4-rc1.patch（57MB）已內含 32x32 CJK 字型資料與 fonts.c/Makefile/Kconfig
-          # 全部段（run #14 實測：再套舊的 cjktty-add-cjk32x32-font-data.patch 會
-          # 「Reversed (or previously applied)」生 .rej 紅燈）——cj2 步驟刪除。
-          curl -fsSL -o /tmp/cj1.patch "$CJ/v7.x/cjktty-7.4-rc1.patch"
-          test "$(wc -c < /tmp/cj1.patch)" -gt 50000000 || { echo "::error::cjktty 補丁下載不完整"; exit 1; }
-          # 2026-11-24 run #48：next 基座已 7.4-rc4，但 cjktty 官方只出到 rc1
-          # 補丁。實測 rc4 的 struct fbcon_rotated 與 rc1 完全相同（bufsize/
-          # buf_rotate 相鄰），衝突來自 drivers/video/fbdev/core/* 在 rc1→rc4
-          # 之間的行號/上下文漂移，屬無害漂移、非結構衝突。分三級套用：
-          #   1) 常規 patch -Np1（上下文完全吻合時最乾淨）
-          #   2) --fuzz=3（容許上下文行偏移，GNU patch 標準做法）
-          #   3) git apply --3way（用補丁 index blob 做三方合併）
-          # 三級都失敗才紅，且成功後驗證 CJK 關鍵符號真的寫進 source tree，
-          # 不靠 fuzz 掩蓋功能缺失（用户铁律：修源頭不降標準）。
-          if ! patch -Np1 < /tmp/cj1.patch; then
-            echo "cjktty 常規 patch 衝突（rc1 補丁 → rc4 基座），試 --fuzz=3"
-            git checkout -- .
-            if ! patch --fuzz=3 -Np1 < /tmp/cj1.patch; then
-              echo "cjktty fuzz=3 仍衝突，試 git apply --3way"
-              git checkout -- .
-              git apply --3way /tmp/cj1.patch \
-                || { echo "::error::cjktty 補丁衝突（三級套用全失敗）"; exit 1; }
-            fi
-          fi
-          # 功能完整性閘門：CJK tty 必須真的寫進原始碼，fuzz 不能吞掉功能。
+          # 2026-11-24 修源頭：舊的 Capricornus007 fork cjktty-7.4-rc1.patch 是
+          # 「full」補丁（code＋32x32 字型合一，57MB），對 next 7.4-rc4 全 hunk 失敗。
+          # 權威 gentoo-zh/cjktty-patches SUPPORTED.md 明確記載：
+          #   | 7.4 (mainline) | 7.4-rc4 | | v7.x/cjktty-code-7.4-rc3.patch | Split ✓ |
+          # 即 rc4 用 rc3 的 code 補丁（7.4 把 fbcon_fill_cursor_mask() 換成
+          # fbcon_cursor_glyph()，code 補丁的 font_bits() context 已更新）。
+          # split 方案：code 補丁（33KB，含 CJK 邏輯＋16x16/32x32 .c 資料＋
+          # Kconfig/Makefile/fonts.c）＋ font-unifont-18 補丁（12MB，提供
+          # font_cjk_16x16.h / font_cjk_32x32.h 宣告）。功能完全覆蓋舊 full 補丁。
+          CJ=https://raw.githubusercontent.com/gentoo-zh/cjktty-patches/master
+          curl -fsSL -o /tmp/cj-code.patch "$CJ/v7.x/cjktty-code-7.4-rc3.patch"
+          curl -fsSL -o /tmp/cj-font.patch "$CJ/cjktty-font-unifont-18.0.01.patch"
+          _cj_code_sz=$(wc -c < /tmp/cj-code.patch)
+          _cj_font_sz=$(wc -c < /tmp/cj-font.patch)
+          echo "cjktty code=$_cj_code_sz font=$_cj_font_sz"
+          # code 補丁 33KB、font 補丁 12MB——下限比對防截斷（不是精確值，上游會更新）。
+          [ "$_cj_code_sz" -gt 30000 ] && [ "$_cj_font_sz" -gt 12000000 ] \
+            || { echo "::error::cjktty split 補丁下載不完整"; exit 1; }
+          # 上游保證 vanilla rc4 fuzz 0 可套；linux-next 若漂移，fuzz=2 是上下文
+          # 行偏移的標準容錯（非降標準，功能由後面符號閘門把關）。
+          patch -Np1 < /tmp/cj-code.patch \
+            || { echo "cjktty code fuzz=0 衝突，試 fuzz=2"; patch --fuzz=2 -Np1 < /tmp/cj-code.patch; } \
+            || { echo "::error::cjktty code 補丁套用失敗（上游 rc4 應 fuzz 0 可套）"; exit 1; }
+          patch -Np1 < /tmp/cj-font.patch \
+            || { echo "::error::cjktty font 補丁套用失敗"; exit 1; }
+          # 功能完整性閘門：CJK tty 邏輯＋字型資料都必須真的進原始碼。
           grep -q 'fontdata_utf' drivers/video/fbdev/core/fbcon.h \
             && grep -q 'font_bits' drivers/video/fbdev/core/fbcon_ccw.c \
-            || { echo "::error::cjktty 套用後缺關鍵符號（fontdata_utf/font_bits），拒絕出包"; exit 1; }
-          git add -A; git commit -qm "cjktty v7.x"
+            && grep -q 'cjk_16x16' lib/fonts/fonts.c \
+            && grep -q 'cjk_32x32' lib/fonts/fonts.c \
+            || { echo "::error::cjktty 套用後缺關鍵符號/字型，拒絕出包"; exit 1; }
+          git add -A; git commit -qm "cjktty v7.x (gentoo-zh split code-7.4-rc3 + unifont-18)"
 
           mkdir -p config ci
           # cwd 是 meta/src（checkout 到 meta 後才 git init src），上層就是 meta 本身；
