@@ -269,10 +269,20 @@ jobs:
           # 已驗證 fuzz 0 可套；用 --forward 讓「已存在/Reversed」提示不帶問號卡住。
           patch --forward -Np1 < /tmp/cj-code.patch \
             || { echo "::error::cjktty next code 補丁套用失敗"; exit 1; }
-          patch --forward -Np1 < /tmp/cj-cjk32.patch \
-            || { echo "::error::cjktty 32x32 字型數據補丁套用失敗"; exit 1; }
-          patch --forward -Np1 < /tmp/cj-font.patch \
-            || { echo "::error::cjktty font 補丁套用失敗"; exit 1; }
+          # 32x32 數據補丁的 font_cjk_32x32.c hunk 已被 code-next 收錄，
+          # patch 對它會報 "Reversed/already applied" 並回 rc=1（正常，非錯誤）；
+          # 真正需要的是它唯一的 43MB font_cjk_32x32.h 數據。故此地不看 patch 的
+          # rc，改以「.h 非空」為成功判據（fuzz 0 乾淨樹實測 .h 正確寫入 43MB）。
+          patch --forward -Np1 < /tmp/cj-cjk32.patch || true
+          [ -s lib/fonts/font_cjk_32x32.h ] \
+            || { echo "::error::cjktty 32x32 字型數據 .h 未寫入"; exit 1; }
+          echo "cjktty 32x32 .h: $(wc -c < lib/fonts/font_cjk_32x32.h) bytes"
+          # 同理：font 補丁的 font_cjk_32x32.h 已被上一步數據補丁寫入，
+          # "already exists" 跳過是正常的；真正需要的是 16x16.h（12MB）。
+          patch --forward -Np1 < /tmp/cj-font.patch || true
+          [ -s lib/fonts/font_cjk_16x16.h ] \
+            || { echo "::error::cjktty 16x16 字型數據 .h 未寫入"; exit 1; }
+          echo "cjktty font .h: 16x16=$(wc -c < lib/fonts/font_cjk_16x16.h) 32x32=$(wc -c < lib/fonts/font_cjk_32x32.h) bytes"
           # 功能完整性閘門：CJK tty 邏輯＋字型資料都必須真的進原始碼。
           grep -q 'fontdata_utf' drivers/video/fbdev/core/fbcon.h \
             && grep -q 'font_bits' drivers/video/fbdev/core/fbcon_ccw.c \
