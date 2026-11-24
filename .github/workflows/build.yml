@@ -41,9 +41,12 @@ jobs:
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/zen1th-repo" \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((a["name"] for a in d.get("assets",[]) if a["name"].startswith("linux-zen1th-") and "headers" not in a["name"]), ""))' 2>/dev/null || true)
-          version=$(grep -E '^pkgver=' PKGBUILD 2>/dev/null | head -1 | cut -d= -f2 || true)
-          echo "远端包: ${remote:-无} / 本轮 pkgver: ${version:-无}"
-          if [ -n "$remote" ] && [ -n "$version" ] && [[ "$remote" == *"-$version-"* ]]; then
+          # PKGBUILD 的 pkgver 是占位（0.r0.g0000000），真版本由 pkgver() 從快照
+          # 計算（版本.r日期.g<sha>）。所以比「zen1th 分支 HEAD sha」與遠端包名 sha。
+          head_sha=$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+                       refs/heads/zen1th 2>/dev/null | awk '{print substr($1,1,10)}' || true)
+          echo "远端包: ${remote:-无} / 本轮快照 sha: ${head_sha:-无}"
+          if [ -n "$remote" ] && [ -n "$head_sha" ] && [[ "$remote" == *"g${head_sha}-"* ]]; then
             echo "版本未变，跳过本轮定时构建"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
