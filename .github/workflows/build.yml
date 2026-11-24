@@ -78,27 +78,38 @@ jobs:
           grep -qE '^(usr/lib|lib)/modules/.*/build$' <<<"$hlisting" || { echo "headers 缺 lib/modules/.../build"; exit 1; }
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
-      - name: 發佈到 current-kernel release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: current-kernel
-          name: linux-zen1th current（UTC+8 自動重建）
-          body: merge-bot 整合完成自動構建。SHA256 見附檔。
-          files: |
-            /home/builder/src/linux-zen1th-*.pkg.tar.zst
-            /home/builder/src/linux-zen1th-*.pkg.tar.zst.sig
-          make_latest: false
+      - name: 清理 current-kernel 旧资源（current 只留最新一对）
+        run: |
+          cd /home/builder/src
+          python3 ci/release-manage.py clean-current
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: SHA256SUMS
         run: |
           cd /home/builder/src
           sha256sum linux-zen1th-*.pkg.tar.zst > SHA256SUMS-kernel
-      - name: 上傳 SHA256
+      - name: 發佈到 current-kernel release（仅本次最新一对 + SHA256）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: current-kernel
-          files: /home/builder/src/SHA256SUMS-kernel
-          append_body: true
+          name: linux-zen1th current（UTC+8 自動重建）
+          body: merge-bot 整合完成自動構建。current 只保留最新一對，歷史見各版本 tag。SHA256 見附檔。
+          files: |
+            /home/builder/src/linux-zen1th-*.pkg.tar.zst
+            /home/builder/src/linux-zen1th-*.pkg.tar.zst.sig
+            /home/builder/src/SHA256SUMS-kernel
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 历史版本归档（每个版本单独 tag）
+        run: |
+          cd /home/builder/src
+          # 从包名提取版本 tag：linux-zen1th-<ver>-1-x86_64.pkg.tar.zst → zen1th-<ver>
+          P=$(ls linux-zen1th-[0-9]*.pkg.tar.zst | head -1)
+          VER=$(printf '%s' "$P" | sed -E 's/^linux-zen1th-(.+)-1-x86_64\.pkg\.tar\.zst$/\1/')
+          TAG="zen1th-${VER}"
+          echo "归档 tag: $TAG"
+          python3 ci/release-manage.py archive "$TAG" \
+            linux-zen1th-*.pkg.tar.zst linux-zen1th-*.pkg.tar.zst.sig SHA256SUMS-kernel
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
