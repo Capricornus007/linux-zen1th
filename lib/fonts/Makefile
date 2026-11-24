@@ -23,4 +23,10 @@ font-$(CONFIG_FONT_TER16x32)  += font_ter16x32.o
 font-$(CONFIG_FONT_CJK_16x16) += font_cjk_16x16.o
 font-$(CONFIG_FONT_CJK_32x32) += font_cjk_32x32.o
 
+ifeq ($(CONFIG_FONT_CJK_32x32),y)
+ifeq ($(shell test -s $(srctree)/lib/fonts/font_cjk_32x32.h && echo y),)
+$(error CONFIG_FONT_CJK_32x32 requires cjktty-add-cjk32x32-font-data.patch)
+endif
+endif
+
 obj-$(CONFIG_FONT_SUPPORT) += font.o

@@ -1058,15 +1058,8 @@ static unsigned int dps310_fifo_interval(struct dps310_data *data,
 {
 	unsigned int drain_interval_ms, fill_ms, want_ms;
 	int scan_rate;
-	int rc;
 
 	fill_ms = MSEC_PER_SEC * DPS310_FIFO_DEPTH / (prs_rate + tmp_rate);
-
-	/* Pressure compensation needs a temperature from the start */
-	scoped_guard(mutex, &data->lock)
-		rc = dps310_read_temp_raw_locked(data);
-	if (rc)
-		return rc;
 
 	/*
 	 * There is no hardware watermark, so take it as the number of scans
@@ -1477,6 +1470,13 @@ static int dps310_probe(struct i2c_client *client)
 	rc = dps310_startup(data);
 	if (rc)
 		return rc;
+
+	/* Pressure compensation needs a temperature from the start */
+	scoped_guard(mutex, &data->lock) {
+		rc = dps310_read_temp_raw_locked(data);
+		if (rc)
+			return rc;
+	}
 
 	/*
 	 * The device measures continuously in background mode, so a triggered

@@ -4745,8 +4745,8 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu, u64 run_flags)
 		vmcb_mark_all_clean(svm->vmcb);
 
 		if (!msr_write_intercepted(svm, MSR_AMD64_PERF_CNTR_GLOBAL_CTL))
-			rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL,
-			       vcpu_to_pmu(vcpu)->global_ctrl);
+			vcpu_to_pmu(vcpu)->global_ctrl =
+				rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL);
 	}
 
 	/* if exit due to PF check for async PF */
@@ -5314,19 +5314,29 @@ static int svm_check_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
 	}
 
 	/*
-	 * Emulate for SEV guests if the insn buffer is not empty.  The buffer
-	 * will be empty if the DecodeAssist microcode cannot fetch bytes for
-	 * the faulting instruction because the code fetch itself faulted, e.g.
-	 * the guest attempted to fetch from emulated MMIO or a guest page
-	 * table used to translate CS:RIP resides in emulated MMIO.
+	 * Under SEV, page tables are encrypted and cannot be read by the
+	 * hypervisor, so there is no way to resolve a fault on page tables.
 	 */
+	error_code = svm->vmcb->control.exit_info_1;
+	if (error_code & PFERR_GUEST_PAGE_MASK)
+		goto resume_guest;
+
 	if (likely(insn_len))
 		return X86EMUL_CONTINUE;
 
 	/*
-	 * Detect and workaround Errata 1096 Fam_17h_00_0Fh.
+	 * The insn buffer was empty; the DecodeAssist microcode could not fetch
+	 * bytes for the faulting instruction because the code fetch itself faulted,
+	 * e.g. the guest attempted to fetch from emulated MMIO or a guest page
+	 * table used to translate CS:RIP resides in emulated MMIO.
 	 *
-	 * Errata:
+	 * A data fault instead could be Errata 1096 Fam_17h_00_0Fh, so only
+	 * retry for a fetch fault and otherwise try to workaround it.
+	 */
+	if (error_code & PFERR_FETCH_MASK)
+		goto resume_guest;
+
+	/*
 	 * When CPU raises #NPF on guest data access and vCPU CR4.SMAP=1, it is
 	 * possible that CPU microcode implementing DecodeAssist will fail to
 	 * read guest memory at CS:RIP and vmcb.GuestIntrBytes will incorrectly
@@ -5353,12 +5363,8 @@ static int svm_check_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
 	 *       retrieve the instruction bytes is legitimate (see abvoe).
 	 *
 	 * In addition, don't apply the erratum workaround if the #NPF occurred
-	 * while translating guest page tables (see below).
+	 * while translating guest page tables (see above).
 	 */
-	error_code = svm->vmcb->control.exit_info_1;
-	if (error_code & (PFERR_GUEST_PAGE_MASK | PFERR_FETCH_MASK))
-		goto resume_guest;
-
 	smep = kvm_is_cr4_bit_set(vcpu, X86_CR4_SMEP);
 	smap = kvm_is_cr4_bit_set(vcpu, X86_CR4_SMAP);
 	is_user = svm_get_cpl(vcpu) == 3;
@@ -5609,7 +5615,7 @@ static __init void svm_adjust_mmio_mask(void)
 		return;
 
 	/* If memory encryption is not enabled, use existing mask */
-	rdmsrq(MSR_AMD64_SYSCFG, msr);
+	msr = rdmsrq(MSR_AMD64_SYSCFG);
 	if (!(msr & MSR_AMD64_SYSCFG_MEM_ENCRYPT))
 		return;
 

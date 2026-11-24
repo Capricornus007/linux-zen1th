@@ -2588,6 +2588,12 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/soc/soc.git
 F:	arch/arm/mach-*/
 F:	arch/arm/plat-*/
 
+ARM TWD WATCHDOG DRIVER
+M:	Fil Dunsky <filipp.dunsky@gmail.com>
+L:	linux-watchdog@vger.kernel.org
+S:	Maintained
+F:	drivers/watchdog/arm_twd_wdt.c
+
 ARM/ACTIONS SEMI ARCHITECTURE
 M:	Andreas Färber <afaerber@suse.de>
 M:	Manivannan Sadhasivam <mani@kernel.org>
@@ -13957,9 +13963,9 @@ F:	Documentation/admin-guide/pm/intel_uncore_frequency_scaling.rst
 F:	drivers/platform/x86/intel/uncore-frequency/
 
 INTEL USBIO USB I/O EXPANDER DRIVERS
-M:	Israel Cepeda <israel.a.cepeda.lopez@intel.com>
 M:	Hans de Goede <hansg@kernel.org>
-R:	Sakari Ailus <sakari.ailus@linux.intel.com>
+M:	Sakari Ailus <sakari.ailus@linux.intel.com>
+R:	Antti Laakso <antti.laakso@linux.intel.com>
 S:	Maintained
 F:	drivers/gpio/gpio-usbio.c
 F:	drivers/i2c/busses/i2c-usbio.c
@@ -17680,6 +17686,7 @@ F:	mm/mmzone.c
 F:	mm/pagewalk.c
 F:	mm/pgtable-generic.c
 F:	mm/ptdump.c
+F:	mm/tests/vmstat_kunit.c
 F:	mm/util.c
 F:	mm/vmpressure.c
 F:	mm/vmstat.c
@@ -21864,6 +21871,7 @@ Q:	https://patchwork.kernel.org/project/linux-pci/list/
 B:	https://bugzilla.kernel.org
 C:	irc://irc.oftc.net/linux-pci
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/pci/pci.git
+F:	Documentation/ABI/testing/sysfs-bus-pci-devices-aer
 F:	Documentation/ABI/testing/sysfs-devices-pci-host-bridge
 F:	Documentation/PCI/
 F:	Documentation/devicetree/bindings/pci/
@@ -25967,6 +25975,13 @@ F:	drivers/media/mmc/siano/
 F:	drivers/media/usb/siano/
 F:	drivers/media/usb/siano/
 
+SIEMENS IPC EC SENSORS DRIVER
+M:	Benedikt Niedermayr <benedikt.niedermayr@siemens.com>
+L:	linux-hwmon@vger.kernel.org
+S:	Maintained
+F:	Documentation/hwmon/simatic-ipc-ec-sensors.rst
+F:	drivers/hwmon/simatic-ipc-ec-sensors.c
+
 SIEMENS IPC LED DRIVERS
 M:	Bao Cheng Su <baocheng.su@siemens.com>
 M:	Benedikt Niedermayr <benedikt.niedermayr@siemens.com>
@@ -26470,13 +26485,6 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/media/i2c/sony,imx576.yaml
 F:	drivers/media/i2c/imx576.c
 
-SONY IMX678 SENSOR DRIVER
-M:	Jai Luthra <jai.luthra@ideasonboard.com>
-L:	linux-media@vger.kernel.org
-S:	Maintained
-F:	Documentation/devicetree/bindings/media/i2c/sony,imx678.yaml
-F:	drivers/media/i2c/imx678.c
-
 SONY IMX908 SENSOR DRIVER
 M:	Lachlan Michael <lachlan.michael@sony.com>
 S:	Maintained
@@ -26492,6 +26500,13 @@ S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/ulfh/mmc.git
 F:	drivers/memstick/
 F:	include/linux/memstick.h
+
+SONY STARVIS 2 SENSOR DRIVER
+M:	Jai Luthra <jai.luthra@ideasonboard.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx678.yaml
+F:	drivers/media/i2c/sony-starvis2.c
 
 SONY VAIO CONTROL DEVICE DRIVER
 M:	Mattia Dongili <malattia@linux.it>
@@ -29152,6 +29167,12 @@ L:	linux-scsi@vger.kernel.org
 S:	Maintained
 F:	drivers/ufs/host/ufs-renesas.c
 
+UNIVERSAL FLASH STORAGE HOST CONTROLLER DRIVER STARFIVE
+M:	Minda Chen <minda.chen@starfivetech.com>
+S:	Maintained
+F:	Documentation/devicetree/bindings/ufs/starfive,jhb100-ufs.yaml
+F:	drivers/ufs/host/ufs-starfive.c
+
 UNIWILL LAPTOP DRIVER
 M:	Armin Wolf <W_Armin@gmx.de>
 L:	platform-driver-x86@vger.kernel.org
@@ -29668,6 +29689,7 @@ F:	drivers/media/i2c/mt*
 F:	drivers/media/i2c/og*
 F:	drivers/media/i2c/ov*
 F:	drivers/media/i2c/s5*
+F:	drivers/media/i2c/sony-starvis*
 F:	drivers/media/i2c/vd55g1.c
 F:	drivers/media/i2c/vd56g3.c
 F:	drivers/media/i2c/vgxy61.c
@@ -31229,12 +31251,6 @@ F:	Documentation/netlink/
 F:	Documentation/userspace-api/netlink/intro-specs.rst
 F:	Documentation/userspace-api/netlink/specs.rst
 F:	tools/net/ynl/
-
-YEALINK PHONE DRIVER
-M:	Henk Vergonet <Henk.Vergonet@gmail.com>
-S:	Maintained
-F:	Documentation/input/devices/yealink.rst
-F:	drivers/input/misc/yealink.*
 
 ZD1211RW WIRELESS DRIVER
 L:	linux-wireless@vger.kernel.org

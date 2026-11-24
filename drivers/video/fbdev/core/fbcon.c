@@ -734,7 +734,9 @@ static void fbcon_prepare_logo(struct vc_data *vc, struct fb_info *info,
 		pr_info("fbcon: disable boot-logo (boot-logo bigger than screen).\n");
 	} else {
 		logo_shown = FBCON_LOGO_DRAW;
-		vc->vc_top = logo_lines;
+		/* keep vc_top if logo covers whole screen */
+		if (logo_lines < vc->vc_bottom)
+			vc->vc_top = logo_lines;
 	}
 }
 #endif /* MODULE */
@@ -799,8 +801,13 @@ static void fbcon_release(struct fb_info *info)
 		kfree(par->cursor_data);
 		kfree(par->cursor_src);
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
-		kfree(par->rotated.buf);
-		kfree(par->rotated.buf_utf);
+		if (par->rotated.buf)
+			font_data_put(par->rotated.buf);
+#ifdef CONFIG_FONT_CJK
+		/* cjktty-next: buf_utf is plain kvalloc'd memory (not a
+		 * font_data_t refcount object), free it the CJK way. */
+		kvfree(par->rotated.buf_utf);
+#endif
 #endif
 		kfree(info->fbcon_par);
 		info->fbcon_par = NULL;
@@ -1164,7 +1171,8 @@ static void fbcon_init(struct vc_data *vc, bool init)
 
 	vc->vc_can_do_color = (fb_get_color_depth(&info->var, &info->fix)!=1);
 	vc->vc_complement_mask = vc->vc_can_do_color ? 0x7700 : 0x0800;
-	if (vc->vc_font.charcount != 512) {
+	if (IS_ENABLED(CONFIG_FONT_CJK) ?
+	    vc->vc_font.charcount != 512 : vc->vc_font.charcount == 256) {
 		vc->vc_hi_font_mask = 0;
 	} else {
 		vc->vc_hi_font_mask = 0x100;
@@ -1486,7 +1494,8 @@ static void fbcon_set_disp(struct fb_info *info, struct fb_var_screeninfo *var,
 	par->var = info->var;
 	vc->vc_can_do_color = (fb_get_color_depth(&info->var, &info->fix)!=1);
 	vc->vc_complement_mask = vc->vc_can_do_color ? 0x7700 : 0x0800;
-	if (vc->vc_font.charcount != 512) {
+	if (IS_ENABLED(CONFIG_FONT_CJK) ?
+	    vc->vc_font.charcount != 512 : vc->vc_font.charcount == 256) {
 		vc->vc_hi_font_mask = 0;
 	} else {
 		vc->vc_hi_font_mask = 0x100;
@@ -1706,8 +1715,6 @@ static void fbcon_redraw_blit(struct vc_data *vc, struct fb_info *info,
 			}
 
 			scr_writew(c, d);
-			scr_writew(scr_readw(s + (vc->vc_screenbuf_size >> 1)),
-				d + (vc->vc_screenbuf_size >> 1));
 			s++;
 			d++;
 		} while (s < le);
@@ -1750,24 +1757,21 @@ static void fbcon_redraw(struct vc_data *vc, int line, int count, int offset)
 					start = s;
 				}
 			}
-			if (((scr_readw(s) & charmask) == 0xff || (scr_readw(s) & charmask) == 0xfe)
-				&& scr_readw(s + (vc->vc_screenbuf_size >> 1))) {
-			} else {
-				if (c == scr_readw(d)) {
-					if (s > start) {
-						fbcon_putcs(vc, start, s - start,
-							     line, x);
-						x += s - start + 1;
-						start = s + 1;
-					} else {
-						x++;
-						start++;
-					}
+			if ((!IS_ENABLED(CONFIG_FONT_CJK) ||
+			     ((c & charmask) != 0xff &&
+			      (c & charmask) != 0xfe)) &&
+			    c == scr_readw(d)) {
+				if (s > start) {
+					fbcon_putcs(vc, start, s - start,
+						     line, x);
+					x += s - start + 1;
+					start = s + 1;
+				} else {
+					x++;
+					start++;
 				}
 			}
 			scr_writew(c, d);
-			scr_writew(scr_readw(s + (vc->vc_screenbuf_size >> 1)),
-				d + (vc->vc_screenbuf_size >> 1));
 			s++;
 			d++;
 		} while (s < le);
@@ -2244,7 +2248,8 @@ static bool fbcon_switch(struct vc_data *vc)
 	vc->vc_can_do_color = (fb_get_color_depth(&info->var, &info->fix)!=1);
 	vc->vc_complement_mask = vc->vc_can_do_color ? 0x7700 : 0x0800;
 
-	if (vc->vc_font.charcount == 512)
+	if (IS_ENABLED(CONFIG_FONT_CJK) ?
+	    vc->vc_font.charcount == 512 : vc->vc_font.charcount > 256)
 		vc->vc_complement_mask <<= 1;
 
 	updatescrollmode(p, info, vc);
@@ -2279,7 +2284,9 @@ static bool fbcon_switch(struct vc_data *vc)
 
 		logo_shown = fg_console;
 		fb_show_logo(info, par->rotate);
-		update_region(vc,
+		/* avoid screen update on full screen sized logo */
+		if (vc->vc_top)
+			update_region(vc,
 			      vc->vc_origin + vc->vc_size_row * vc->vc_top,
 			      vc->vc_size_row * (vc->vc_bottom -
 						 vc->vc_top) / 2);
@@ -2492,6 +2499,13 @@ static int fbcon_do_set_font(struct vc_data *vc, int w, int h, int charcount,
 		}
 	}
 
+	if (con_is_visible(vc)) {
+		if (par->bitops->rotate_font && par->bitops->rotate_font(info, vc)) {
+			par->rotate = FB_ROTATE_UR;
+			set_blitting_type(vc, info);
+		}
+	}
+
 	if (resize) {
 		int cols, rows;
 
@@ -2510,8 +2524,12 @@ static int fbcon_do_set_font(struct vc_data *vc, int w, int h, int charcount,
 
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 	if (rotated_saved) {
+#ifdef CONFIG_FONT_CJK
+		font_data_put(saved_rotated.buf);
+		kvfree(saved_rotated.buf_utf);
+#else
 		kfree(saved_rotated.buf);
-		kfree(saved_rotated.buf_utf);
+#endif
 	}
 #endif
 	if (old_fontdata)
@@ -2526,8 +2544,12 @@ err_out:
 	 * state.
 	 */
 	if (rotated_saved) {
-		kfree(par->rotated.buf);
-		kfree(par->rotated.buf_utf);
+#ifdef CONFIG_FONT_CJK
+		font_data_put(par->rotated.buf);
+		kvfree(par->rotated.buf_utf);
+#else
+		font_data_put(par->rotated.buf);
+#endif
 		par->rotated = saved_rotated;
 	}
 #endif
@@ -2549,6 +2571,13 @@ err_out:
 	 */
 	if (con_is_visible(vc))
 		set_blitting_type(vc, info);
+
+	if (con_is_visible(vc)) {
+		if (par->bitops->rotate_font && par->bitops->rotate_font(info, vc)) {
+			par->rotate = FB_ROTATE_UR;
+			set_blitting_type(vc, info);
+		}
+	}
 
 	font_data_put(data);
 

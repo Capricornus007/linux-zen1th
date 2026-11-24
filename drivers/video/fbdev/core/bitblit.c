@@ -16,7 +16,9 @@
 #include <linux/fb.h>
 #include <linux/vt_kern.h>
 #include <linux/console.h>
+#ifdef CONFIG_FONT_CJK
 #include <linux/font.h>
+#endif
 #include <asm/types.h>
 #include "fbcon.h"
 #include "fbcon_rotate.h"
@@ -24,12 +26,13 @@
 /*
  * Accelerated handlers.
  */
-static void update_attr(u8 *dst, const u8 *src, int attribute, struct vc_data *vc)
+static void update_attr(unsigned char *dst, const unsigned char *src, int attribute,
+			struct vc_data *vc)
 {
 	int i, offset = (vc->vc_font.height < 10) ? 1 : 2;
 	int width = DIV_ROUND_UP(vc->vc_font.width, 8);
 	unsigned int cellsize = vc->vc_font.height * width;
-	u8 c;
+	unsigned char c;
 
 	offset = cellsize - (offset * width);
 	for (i = 0; i < cellsize; i++) {
@@ -44,55 +47,93 @@ static void update_attr(u8 *dst, const u8 *src, int attribute, struct vc_data *v
 	}
 }
 
-static u16 utf8_pos(struct vc_data *vc, const u16 *s)
+#ifdef CONFIG_FONT_CJK
+const u8 *font_bits(struct vc_data *vc, u16 ch, u32 c_utf, bool continuation,
+		    u32 cellsize, struct fbcon_par *par)
 {
-	unsigned long p = (unsigned long) s;
+	const char *fontname = vc->vc_font.width == 8 && vc->vc_font.height == 16 ?
+		"CJK16x16" : vc->vc_font.width == 16 && vc->vc_font.height == 32 ?
+		"CJK32x32" : NULL;
 
-	if (p >= vc->vc_origin && p < vc->vc_scr_end)
-		return scr_readw((u16 *) (p + vc->vc_screenbuf_size));
-	else
-		return scr_readw(s + 1);
-}
+	if (c_utf > 0xffff)
+		c_utf = 0xfffd;
 
-const u8 *font_bits(struct vc_data *vc, const u16 *s, u32 cellsize, u16 charmask,
-	struct fbcon_par *par)
-{
-	u16 ch = scr_readw(s) & charmask;
-
+#ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 	if (par) {
+		static const u8 blank[DIV_ROUND_UP(FB_MAX_BLIT_WIDTH, 8) *
+				      FB_MAX_BLIT_HEIGHT];
+		const struct font_desc *font;
+		const u8 *fontdata;
+		u32 cellsize_utf;
+		size_t offset, size;
+
 		/* rotated path: lookup in the rotated glyph buffer */
-		if (ch != 0xff && ch != 0xfe)
+		if (!par->rotated.buf || par->rotated.bufsize < cellsize ||
+		    par->rotated.fontdata != vc->vc_font.data)
+			return blank;
+		if (!c_utf) {
+			if (ch >= vc->vc_font.charcount ||
+			    ((size_t)ch + 1) * cellsize > par->rotated.bufsize)
+				ch = 0;
 			return par->rotated.buf + ch * cellsize;
+		}
 
 		/* CJK characters: lookup in the UTF rotated buffer */
-		if (!par->rotated.buf_utf)
+		font = fontname ? find_font(fontname) : NULL;
+		if (!font || !font->data)
 			return par->rotated.buf;
+		if (font->data == vc->vc_font.data) {
+			fontdata = par->rotated.buf;
+			size = par->rotated.bufsize;
+		} else {
+			if (!par->rotated.buf_utf ||
+			    par->rotated.fontdata_utf != font->data)
+				return par->rotated.buf;
+			fontdata = par->rotated.buf_utf;
+			size = par->rotated.bufsize_utf;
+		}
 
-		u16 c_utf = utf8_pos(vc, s);
-		u32 cellsize_utf = (cellsize < 64) ? 16 : 64;
-		if (ch == 0xff)
-			return par->rotated.buf_utf + c_utf * cellsize_utf * 2;
-		else
-			return par->rotated.buf_utf + c_utf * cellsize_utf * 2 + cellsize_utf;
-	} else {
+		cellsize_utf = par->rotated.buf_rotate % 2 ?
+			font_glyph_size(font->height, font->width) :
+			font_glyph_size(font->width, font->height);
+		offset = (size_t)c_utf * 2 + continuation;
+		if (cellsize != cellsize_utf || offset >= font->charcount)
+			return par->rotated.buf;
+		offset *= cellsize_utf;
+		if (offset + cellsize > size)
+			return par->rotated.buf;
+		return fontdata + offset;
+	} else
+#endif
+	{
+		const struct font_desc *font;
+		const u8 *fontdata;
+		u32 cellsize_utf;
+		size_t offset;
+
 		/* non-rotated path (bitblit): lookup in font data directly */
-		if (ch != 0xff && ch != 0xfe)
+		if (!c_utf) {
+			if (ch >= vc->vc_font.charcount)
+				ch = 0;
 			return vc->vc_font.data + ch * cellsize;
+		}
 
-		const char *fontname = (cellsize < 64) ? "CJK16x16" : "CJK32x32";
-		const struct font_desc *font = find_font(fontname);
+		font = fontname ? find_font(fontname) : NULL;
 		if (!font || !font->data)
 			return vc->vc_font.data;
 
-		u16 c_utf = utf8_pos(vc, s);
-		u32 cellsize_utf = (cellsize < 64) ? 16 : 64;
-		const u8 *fontdata = font_data_buf(font->data);
-		if (ch == 0xff)
-			return fontdata + c_utf * cellsize_utf * 2;
-		else
-			return fontdata + c_utf * cellsize_utf * 2 + cellsize_utf;
+		cellsize_utf = font_glyph_size(font->width, font->height);
+		offset = (size_t)c_utf * 2 + continuation;
+		if (cellsize != cellsize_utf || offset >= font->charcount)
+			return vc->vc_font.data;
+		fontdata = font_data_buf(font->data);
+		offset *= cellsize_utf;
+		if (offset + cellsize > font_data_size(font->data))
+			return vc->vc_font.data;
+		return fontdata + offset;
 	}
 }
+#endif
 
 static void bit_bmove(struct vc_data *vc, struct fb_info *info, int sy,
 		      int sx, int dy, int dx, int height, int width)
@@ -126,15 +167,36 @@ static void bit_clear(struct vc_data *vc, struct fb_info *info, int sy,
 
 static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				     const u16 *s, u32 attr, u32 cnt,
-				     u32 d_pitch, u32 s_pitch, u32 cellsize,
-				     struct fb_image *image, u8 *buf, u8 *dst)
+				     u32 d_pitch, u32 s_width, u32 s_vpitch,
+				     struct fb_image *image,
+				     unsigned char *buf, u8 *dst)
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 idx = vc->vc_font.width >> 3;
-	const u8 *src;
+	struct fbcon_par *par = info->fbcon_par;
+	u32 s_pitch = font_glyph_pitch(s_width);
+	const unsigned char *src;
 
 	while (cnt--) {
-		src = font_bits(vc, s++, cellsize, charmask, NULL);
+		u16 ch = scr_readw(s++) & charmask;
+
+#ifdef CONFIG_FONT_CJK
+		bool continuation;
+		u32 cy = (image->dy / vc->vc_font.height + par->p->vrows -
+			  par->p->yscroll) % par->p->vrows;
+		u32 cx = image->dx / vc->vc_font.width + (cnt);
+		u32 c_utf = vc_uniscr_get_cjk(vc, cy, cx, &continuation);
+		u32 cellsize = font_glyph_size(s_width, s_vpitch);
+
+		src = font_bits(vc, ch, c_utf, continuation, cellsize, NULL);
+#else
+		src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, ch);
+#endif
+		if (!src) {
+			src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, '\0');
+			if (!src)
+				goto next_char;
+		}
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -147,7 +209,7 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 		else
 			fb_pad_aligned_buffer(dst, d_pitch, src, idx,
 					      image->height);
-
+next_char:
 		dst += s_pitch;
 	}
 
@@ -157,17 +219,38 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 static inline void bit_putcs_unaligned(struct vc_data *vc,
 				       struct fb_info *info, const u16 *s,
 				       u32 attr, u32 cnt, u32 d_pitch,
-				       u32 s_pitch, u32 cellsize,
-				       struct fb_image *image, u8 *buf,
-				       u8 *dst)
+				       u32 s_width, u32 s_vpitch,
+				       struct fb_image *image,
+				       unsigned char *buf, u8 *dst)
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 shift_low = 0, mod = vc->vc_font.width % 8;
 	u32 shift_high = 8;
 	u32 idx = vc->vc_font.width >> 3;
-	const u8 *src;
+	struct fbcon_par *par = info->fbcon_par;
+	u32 s_pitch = font_glyph_pitch(s_width);
+	const unsigned char *src;
+
 	while (cnt--) {
-		src = font_bits(vc, s++, cellsize, charmask, NULL);
+		u16 ch = scr_readw(s++) & charmask;
+
+#ifdef CONFIG_FONT_CJK
+		bool continuation;
+		u32 cy = (image->dy / vc->vc_font.height + par->p->vrows -
+			  par->p->yscroll) % par->p->vrows;
+		u32 cx = image->dx / vc->vc_font.width + (cnt);
+		u32 c_utf = vc_uniscr_get_cjk(vc, cy, cx, &continuation);
+		u32 cellsize = font_glyph_size(s_width, s_vpitch);
+
+		src = font_bits(vc, ch, c_utf, continuation, cellsize, NULL);
+#else
+		src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, ch);
+#endif
+		if (!src) {
+			src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, '\0');
+			if (!src)
+				goto next_char;
+		}
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -177,6 +260,7 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 		fb_pad_unaligned_buffer(dst, d_pitch, src, idx,
 					image->height, shift_high,
 					shift_low, mod);
+next_char:
 		shift_low += mod;
 		dst += (shift_low >= 8) ? s_pitch : s_pitch - 1;
 		shift_low &= 7;
@@ -194,14 +278,16 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 	struct fbcon_par *par = info->fbcon_par;
 	struct fb_image image;
 	u32 vyres = GETVYRES(par->p, info);
-	u32 width = DIV_ROUND_UP(vc->vc_font.width, 8);
-	u32 cellsize = width * vc->vc_font.height;
+	u32 width = vc->vc_font.width;
+	u32 vpitch = vc->vc_font.height;
+	u32 cellsize = font_glyph_size(width, vpitch);
 	u32 maxcnt = info->pixmap.size/cellsize;
 	u32 scan_align = info->pixmap.scan_align - 1;
 	u32 buf_align = info->pixmap.buf_align - 1;
 	u32 mod = vc->vc_font.width % 8, cnt, pitch, size;
 	u32 attribute = get_attribute(info, scr_readw(s));
-	u8 *dst, *buf = NULL;
+	unsigned char *buf = NULL;
+	u8 *dst;
 
 	image.fg_color = fg;
 	image.bg_color = bg;
@@ -249,10 +335,10 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 
 		if (!mod)
 			bit_putcs_aligned(vc, info, s, attribute, cnt, pitch,
-					  width, cellsize, &image, buf, dst);
+					  width, vpitch, &image, buf, dst);
 		else
 			bit_putcs_unaligned(vc, info, s, attribute, cnt,
-					    pitch, width, cellsize, &image,
+					    pitch, width, vpitch, &image,
 					    buf, dst);
 
 		image.dx += cnt * vc->vc_font.width;
@@ -305,11 +391,14 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	struct fb_cursor cursor;
 	struct fbcon_par *par = info->fbcon_par;
 	unsigned short charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
-	int w = DIV_ROUND_UP(vc->vc_font.width, 8), c;
+	int width = vc->vc_font.width;
+	int vpitch = vc->vc_font.height;
+	int cellsize = font_glyph_size(width, vpitch);
+	int c;
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
 	int err = 1;
-	const u8 *src;
+	const unsigned char *src;
 
 	cursor.set = 0;
 
@@ -320,21 +409,33 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	attribute = get_attribute(info, c);
 	c &= charmask;
 
-	/* Clamp to font size, same as bit_putcs_aligned() */
-	if (c >= vc->vc_font.charcount)
-		c = 0;
-	src = font_bits(vc, (u16 *) vc->vc_pos, (w * vc->vc_font.height), charmask, NULL);
+#ifdef CONFIG_FONT_CJK
+	{
+		bool continuation;
+		u32 c_utf = vc_uniscr_get_cjk(vc, vc->state.y, vc->state.x, &continuation);
+		u32 cellsize = font_glyph_size(width, vpitch);
+
+		src = font_bits(vc, c, c_utf, continuation, cellsize, NULL);
+	}
+#else
+	src = font_data_glyph_buf(par->p->fontdata, width, vpitch, c);
+#endif
+	if (!src) {
+		src = font_data_glyph_buf(par->p->fontdata, width, vpitch, '\0');
+		if (!src)
+			return;
+	}
 
 	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
-		par->cursor_state.image.data = (u8 *)src;
+		par->cursor_state.image.data = (const char *)src;
 		cursor.set |= FB_CUR_SETIMAGE;
 	}
 
 	if (attribute) {
-		u8 *dst;
+		unsigned char *dst;
 
-		dst = kmalloc_array(w, vc->vc_font.height, GFP_ATOMIC);
+		dst = kmalloc(cellsize, GFP_ATOMIC);
 		if (!dst)
 			return;
 		kfree(par->cursor_data);

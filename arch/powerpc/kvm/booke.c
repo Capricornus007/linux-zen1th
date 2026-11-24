@@ -736,10 +736,8 @@ int kvmppc_core_check_requests(struct kvm_vcpu *vcpu)
 
 	if (kvm_check_request(KVM_REQ_PENDING_TIMER, vcpu))
 		update_timer_ints(vcpu);
-#if defined(CONFIG_KVM_E500V2) || defined(CONFIG_KVM_E500MC)
 	if (kvm_check_request(KVM_REQ_TLB_FLUSH, vcpu))
 		kvmppc_core_flush_tlb(vcpu);
-#endif
 
 	if (kvm_check_request(KVM_REQ_WATCHDOG, vcpu)) {
 		vcpu->run->exit_reason = KVM_EXIT_WATCHDOG;
@@ -1843,6 +1841,14 @@ void kvmppc_core_commit_memory_region(struct kvm *kvm,
 
 void kvmppc_core_flush_memslot(struct kvm *kvm, struct kvm_memory_slot *memslot)
 {
+	struct kvm_gfn_range range = {
+		.slot = memslot,
+		.start = memslot->base_gfn,
+		.end = memslot->base_gfn + memslot->npages,
+	};
+
+	if (kvm_unmap_gfn_range(kvm, &range))
+		kvm_flush_remote_tlbs(kvm);
 }
 
 void kvmppc_set_epcr(struct kvm_vcpu *vcpu, u32 new_epcr)

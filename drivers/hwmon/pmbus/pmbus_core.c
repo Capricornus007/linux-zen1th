@@ -123,6 +123,7 @@ struct pmbus_data {
 #endif
 
 	bool has_status_word;		/* device uses STATUS_WORD register */
+	bool has_status_cml;		/* device supports STATUS_CML W1C */
 	int (*read_status)(struct i2c_client *client, int page);
 
 	s16 currpage;	/* current page, -1 for unknown/unset */
@@ -230,7 +231,11 @@ int pmbus_set_page(struct i2c_client *client, int page, int phase)
 		return 0;
 
 	if (!(data->info->func[page] & PMBUS_PAGE_VIRTUAL) &&
-	    data->info->pages > 1 && page != data->currpage) {
+	    (data->info->pages > 1 || (data->flags & PMBUS_FORCE_PAGE_CHANGE)) &&
+	    page != data->currpage) {
+		/* A failed page change can leave the chip on any page */
+		data->currpage = -1;
+
 		pmbus_wait(client);
 		rv = i2c_smbus_write_byte_data(client, PMBUS_PAGE, page);
 		pmbus_update_ts(client, PMBUS_OP_WRITE | PMBUS_OP_PAGE_CHANGE);
@@ -245,19 +250,24 @@ int pmbus_set_page(struct i2c_client *client, int page, int phase)
 
 		if (rv != page)
 			return -EIO;
+
+		data->currpage = page;
 	}
-	data->currpage = page;
 
 	if (data->info->phases[page] && data->currphase != phase &&
 	    !(data->info->func[page] & PMBUS_PHASE_VIRTUAL)) {
+		/* A failed phase change can leave the chip on any phase */
+		data->currphase = -1;
+
 		pmbus_wait(client);
 		rv = i2c_smbus_write_byte_data(client, PMBUS_PHASE,
 					       phase);
 		pmbus_update_ts(client, PMBUS_OP_WRITE);
 		if (rv)
 			return rv;
+
+		data->currphase = phase;
 	}
-	data->currphase = phase;
 
 	return 0;
 }
@@ -718,6 +728,27 @@ void pmbus_clear_faults(struct i2c_client *client)
 }
 EXPORT_SYMBOL_NS_GPL(pmbus_clear_faults, "PMBUS");
 
+static void pmbus_clear_cml_fault(struct i2c_client *client, int page)
+{
+	struct pmbus_data *data = i2c_get_clientdata(client);
+
+	if (!data->has_status_cml ||
+	    _pmbus_write_byte_data(client, page, PMBUS_STATUS_CML,
+				   PB_CML_FAULT_INVALID_COMMAND |
+				   PB_CML_FAULT_INVALID_DATA) < 0)
+		pmbus_clear_fault_page(client, page);
+}
+
+void pmbus_clear_cml_faults(struct i2c_client *client)
+{
+	struct pmbus_data *data = i2c_get_clientdata(client);
+	int i;
+
+	for (i = 0; i < data->info->pages; i++)
+		pmbus_clear_cml_fault(client, i);
+}
+EXPORT_SYMBOL_NS_GPL(pmbus_clear_cml_faults, "PMBUS");
+
 static int pmbus_check_status_cml(struct i2c_client *client)
 {
 	struct pmbus_data *data = i2c_get_clientdata(client);
@@ -746,7 +777,7 @@ static bool pmbus_check_register(struct i2c_client *client,
 	if (rv < 0 && (data->flags & PMBUS_READ_STATUS_AFTER_FAILED_CHECK))
 		data->read_status(client, -1);
 	if (reg < PMBUS_VIRT_BASE)
-		pmbus_clear_fault_page(client, -1);
+		pmbus_clear_cml_fault(client, -1);
 	return rv >= 0;
 }
 
@@ -763,7 +794,7 @@ static bool pmbus_check_status_register(struct i2c_client *client, int page)
 			status = -EIO;
 	}
 
-	pmbus_clear_fault_page(client, -1);
+	pmbus_clear_cml_fault(client, -1);
 	return status >= 0;
 }
 
@@ -791,7 +822,7 @@ static bool __maybe_unused pmbus_check_block_register(struct i2c_client *client,
 		rv = pmbus_check_status_cml(client);
 	if (rv < 0 && (data->flags & PMBUS_READ_STATUS_AFTER_FAILED_CHECK))
 		data->read_status(client, -1);
-	pmbus_clear_fault_page(client, -1);
+	pmbus_clear_cml_fault(client, -1);
 	return rv >= 0;
 }
 
@@ -3047,16 +3078,24 @@ static int pmbus_init_common(struct i2c_client *client, struct pmbus_data *data,
 		data->revision = info->pmbus_revision;
 	} else {
 		ret = i2c_smbus_read_byte_data(client, PMBUS_REVISION);
-		if (ret >= 0) {
+		if (ret >= 0 && ret != 0xff) {
 			data->have_pmbus_revision = true;
 			data->revision = ret;
 		}
 	}
 
+	if (data->revision >= PMBUS_REV_12 &&
+	    (!info->write_byte || info->write_byte_data)) {
+		ret = _pmbus_read_byte_data(client, info->pages ? 0 : -1,
+					    PMBUS_STATUS_CML);
+		if (ret >= 0 && ret != 0xff)
+			data->has_status_cml = true;
+	}
+
 	if (data->info->pages)
-		pmbus_clear_faults(client);
+		pmbus_clear_cml_faults(client);
 	else
-		pmbus_clear_fault_page(client, -1);
+		pmbus_clear_cml_fault(client, -1);
 
 	if (info->identify) {
 		ret = (*info->identify)(client, info);
@@ -3704,7 +3743,7 @@ static int pmbus_write_smbalert_mask(struct i2c_client *client, u8 page, u8 reg,
 	 * Clear fault systematically in case writing PMBUS_SMBALERT_MASK
 	 * is not supported by the chip.
 	 */
-	pmbus_clear_fault_page(client, page);
+	pmbus_clear_cml_fault(client, page);
 
 	return ret;
 }

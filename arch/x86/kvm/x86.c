@@ -6491,8 +6491,14 @@ restart:
 		/* Save the faulting GPA (cr2) in the address field */
 		ctxt->exception.address = cr2_or_gpa;
 
-		/* With shadow page tables, cr2 contains a GVA or nGPA. */
-		if (vcpu->arch.mmu->root_role.direct) {
+		/*
+		 * Remember the GPA if available; with shadow page tables,
+		 * cr2 contains a GVA or nGPA, and if the fault occurred while
+		 * walking the guest's page tables, the GPA is that of a guest
+		 * paging structure.
+		 */
+		if (vcpu->arch.mmu->root_role.direct &&
+		    !(emulation_type & EMULTYPE_PF_GUEST_PAGE)) {
 			ctxt->gpa_access = ACC_READ_MASK;
 			/*
 			 * Always allow writes for guests with protected page
@@ -7094,7 +7100,7 @@ int kvm_x86_vendor_init(struct kvm_x86_init_ops *ops)
 	}
 
 	if (boot_cpu_has(X86_FEATURE_SHSTK) || boot_cpu_has(X86_FEATURE_IBT)) {
-		rdmsrq(MSR_IA32_S_CET, kvm_host.s_cet);
+		kvm_host.s_cet = rdmsrq(MSR_IA32_S_CET);
 		/*
 		 * Linux doesn't yet support supervisor shadow stacks (SSS), so
 		 * KVM doesn't save/restore the associated MSRs, i.e. KVM may
@@ -7126,7 +7132,7 @@ int kvm_x86_vendor_init(struct kvm_x86_init_ops *ops)
 	}
 
 	if (boot_cpu_has(X86_FEATURE_XSAVES)) {
-		rdmsrq(MSR_IA32_XSS, kvm_host.xss);
+		kvm_host.xss = rdmsrq(MSR_IA32_XSS);
 		kvm_caps.supported_xss = kvm_host.xss & KVM_SUPPORTED_XSS;
 	}
 
@@ -7138,7 +7144,7 @@ int kvm_x86_vendor_init(struct kvm_x86_init_ops *ops)
 	kvm_init_pmu_capability(ops->pmu_ops);
 
 	if (boot_cpu_has(X86_FEATURE_ARCH_CAPABILITIES))
-		rdmsrq(MSR_IA32_ARCH_CAPABILITIES, kvm_host.arch_capabilities);
+		kvm_host.arch_capabilities = rdmsrq(MSR_IA32_ARCH_CAPABILITIES);
 
 	WARN_ON_ONCE(kvm_nr_uret_msrs);
 

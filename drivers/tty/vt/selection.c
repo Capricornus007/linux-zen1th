@@ -48,6 +48,15 @@ static struct vc_selection {
 	.start = -1,
 };
 
+static bool is_cjk_continuation(const struct vc_data *vc, int offset)
+{
+	bool continuation;
+
+	vc_uniscr_get_cjk(vc, offset / vc->vc_size_row,
+			 offset % vc->vc_size_row / 2, &continuation);
+	return continuation;
+}
+
 /* clear_selection, highlight and highlight_pointer can be called
    from interrupt (via scrollback/front) */
 
@@ -242,7 +251,8 @@ static int vc_selection_store_chars(struct vc_data *vc, bool unicode)
 			}
 			obp = bp;
 		}
-		if (c > 0x80)
+		if (IS_ENABLED(CONFIG_FONT_CJK) && i + 2 <= vc_sel.end &&
+		    is_cjk_continuation(vc_sel.cons, i + 2))
 			i += 2;
 	}
 	vc_sel.buf_len = bp - vc_sel.buffer;

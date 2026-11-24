@@ -3133,10 +3133,6 @@ static int psr2_sel_fetch_apply_su_area(struct intel_atomic_state *state,
 	if (full_update)
 		crtc_state->psr2_su_area = display_area;
 
-	if (full_update)
-		clip_area_update(&crtc_state->psr2_su_area, &display_area,
-				 &display_area);
-
 	/*
 	 * Now that we have the pipe damaged area check if it intersect with
 	 * every plane, if it does set the plane selective fetch area.

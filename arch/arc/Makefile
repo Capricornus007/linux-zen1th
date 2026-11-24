@@ -71,8 +71,12 @@ cflags-$(disable_small_data)		+= -mno-sdata
 cflags-$(CONFIG_CPU_BIG_ENDIAN)		+= -mbig-endian
 ldflags-$(CONFIG_CPU_BIG_ENDIAN)	+= -EB
 
+# Millicode thunks for prologue/epilogue (e.g. at -Os) live in libgcc,
+# which neither the kernel nor modules link against
+cflags-y				+= -mno-millicode
+
 # Modules with short calls might break for calls into builtin-kernel
-KBUILD_CFLAGS_MODULE	+= -mlong-calls -mno-millicode
+KBUILD_CFLAGS_MODULE	+= -mlong-calls
 
 # Finally dump eveything into kernel build system
 KBUILD_CFLAGS	+= $(cflags-y)

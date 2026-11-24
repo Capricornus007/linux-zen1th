@@ -129,8 +129,8 @@ int ntfs_stream_inode_validate(struct inode *vi)
 		return -ESTALE;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 	err = ntfs_attr_lookup(AT_DATA, ni->name, ni->name_len,
 			CASE_SENSITIVE, 0, NULL, 0, ctx);
 	ntfs_attr_put_search_ctx(ctx);
@@ -599,8 +599,9 @@ struct inode *ntfs_create_named_stream(const struct mnt_idmap *idmap,
 		goto out_unlock;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unlock;
 	}
 
@@ -1256,8 +1257,9 @@ static int ntfs_stream_ioctl_get_inode(struct inode *base_vi, __le16 *sname,
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unlock;
 	}
 
@@ -1638,9 +1640,9 @@ int ntfs_ioctl_list_streams(struct file *filp, unsigned long arg)
 		return -ENOENT;
 	}
 	actx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!actx) {
+	if (IS_ERR(actx)) {
 		mutex_unlock(&ni->mrec_lock);
-		return -ENOMEM;
+		return PTR_ERR(actx);
 	}
 
 	while ((err = ntfs_attrs_walk(actx)) == 0) {

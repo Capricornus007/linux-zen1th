@@ -13,6 +13,7 @@
 
 #include <linux/compiler_types.h>
 #include <linux/font.h>
+#include <linux/selection.h>
 #include <linux/types.h>
 #include <linux/vt_buffer.h>
 #include <linux/vt_kern.h>
@@ -75,15 +76,21 @@ struct fbcon_bitops {
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 struct fbcon_rotated {
 	font_data_t *fontdata;       /* source font */
-	u8 *buf;                     /* rotated glyphs */
-	size_t bufsize;
-	font_data_t *fontdata_utf;   /* CJK font source */
-	u8 *buf_utf;                 /* rotated CJK glyphs */
-	size_t bufsize_utf;
+	font_data_t *buf;            /* rotated font */
 	int buf_rotate;              /* rotation of buf */
 	unsigned int buf_width;      /* geometry of source font */
 	unsigned int buf_height;
 	unsigned int buf_charcount;
+#ifdef CONFIG_FONT_CJK
+	/* cjktty-next: next removed bufsize in the font_data_t refcount
+	 * rework; cjktty font_bits() needs the rotated buffer size. Keep a
+	 * CJK-only shadow, maintained in fbcon_rotate_font().
+	 */
+	size_t bufsize;              /* size of rotated.buf (CJK shadow) */
+	font_data_t *fontdata_utf;   /* CJK font source */
+	u8 *buf_utf;                 /* rotated CJK glyphs */
+	size_t bufsize_utf;
+#endif
 };
 #endif
 
@@ -102,7 +109,7 @@ struct fbcon_par {
 	bool   initialized;
 	bool   cursor_blink_on;
 	int    rotate;
-	char  *cursor_data;
+	unsigned char *cursor_data;
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 	struct fbcon_rotated rotated;
 #endif
@@ -212,8 +219,10 @@ extern void fbcon_set_tileops(struct vc_data *vc, struct fb_info *info);
 #endif
 extern void fbcon_set_bitops_ur(struct fbcon_par *par);
 extern int  soft_cursor(struct fb_info *info, struct fb_cursor *cursor);
-extern const u8 *font_bits(struct vc_data *vc, const u16 *s, u32 cellsize,
-		     u16 charmask, struct fbcon_par *par);
+#ifdef CONFIG_FONT_CJK
+extern const u8 *font_bits(struct vc_data *vc, u16 ch, u32 c_utf, bool continuation,
+			   u32 cellsize, struct fbcon_par *par);
+#endif
 
 unsigned char *fbcon_cursor_glyph(const struct vc_font *font, unsigned int cursor_type);
 

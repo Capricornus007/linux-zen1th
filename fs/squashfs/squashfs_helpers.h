@@ -59,7 +59,7 @@ static inline s64 squashfs_inode_start(struct squashfs_sb_info *msblk, s64 inode
 
 	start = msblk->inode_table + squashfs_inode_blk(inode);
 
-	if (start > msblk->directory_table)
+	if (start >= msblk->directory_table)
 		return -EINVAL;
 
 	return start;
@@ -80,8 +80,7 @@ static inline s64 squashfs_dir_start(u32 blk, struct squashfs_sb_info *msblk)
 
 	start = msblk->directory_table + blk;
 
-	if (msblk->directory_table < msblk->directory_table_end &&
-				start >= msblk->directory_table_end)
+	if (start >= msblk->directory_table_end)
 		return -EINVAL;
 
 	return start;
@@ -135,7 +134,7 @@ static inline s64 squashfs_fragment_indexes_start(u32 fragments, struct squashfs
 	return start;
 }
 
-static inline s16 squashfs_fragment_indexes_offset(u32 fragments)
+static inline s32 squashfs_fragment_indexes_offset(u32 fragments)
 {
 	return (squashfs_fragment_index(fragments) * sizeof(long long)) & (PAGE_SIZE - 1);
 }
@@ -188,7 +187,7 @@ static inline s64 squashfs_lookup_blocks_start(u32 inodes, struct squashfs_sb_in
 	return start;
 }
 
-static inline s16 squashfs_lookup_blocks_offset(u32 inodes)
+static inline s32 squashfs_lookup_blocks_offset(u32 inodes)
 {
 	return (squashfs_lookup_block(inodes) * sizeof(long long)) & (PAGE_SIZE - 1);
 }
@@ -269,7 +268,7 @@ static inline s64 squashfs_xattr_blocks_start(u32 xattrs, struct squashfs_sb_inf
 	return start;
 }
 
-static inline s16 squashfs_xattr_blocks_offset(u32 xattrs)
+static inline s32 squashfs_xattr_blocks_offset(u32 xattrs)
 {
 	return (squashfs_xattr_block(xattrs) * sizeof(long long)) & (PAGE_SIZE - 1);
 }

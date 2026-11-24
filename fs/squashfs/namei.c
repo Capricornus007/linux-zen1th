@@ -74,11 +74,8 @@ static unsigned int get_dir_index_using_name(struct super_block *sb,
 
 	TRACE("Entered get_dir_index_using_name, i_count %u\n", i_count);
 
-	dir_index = kmalloc(sizeof(*dir_index) + SQUASHFS_NAME_LEN + 1, GFP_KERNEL);
-	if (dir_index == NULL) {
-		ERROR("Failed to allocate squashfs_dir_index\n");
+	if (i_count == 0)
 		goto out;
-	}
 
 	/*
 	 * Translate from external index to internal index.  This is offset by
@@ -96,6 +93,12 @@ static unsigned int get_dir_index_using_name(struct super_block *sb,
 
 	max_index -= sizeof(struct squashfs_dir_header) +
 				sizeof(struct squashfs_dir_entry) + 1;
+
+	dir_index = kmalloc(sizeof(*dir_index) + SQUASHFS_NAME_LEN + 1, GFP_KERNEL);
+	if (dir_index == NULL) {
+		ERROR("Failed to allocate squashfs_dir_index\n");
+		goto out;
+	}
 
 	for (i = 0; i < i_count; i++) {
 		err = squashfs_read_metadata(sb, dir_index, &index_start,
@@ -147,10 +150,9 @@ static unsigned int get_dir_index_using_name(struct super_block *sb,
 		*next_block = res;
 	}
 
-out:
 	*next_offset = ((u64)length + *next_offset) % SQUASHFS_METADATA_SIZE;
 	kfree(dir_index);
-
+out:
 	/*
 	 * Return index (f_pos) of the looked up metadata block.  Translate
 	 * from internal f_pos to external f_pos which is offset by 3 because
@@ -170,15 +172,23 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 	struct squashfs_sb_info *msblk = dir->i_sb->s_fs_info;
 	struct squashfs_dir_header dirh;
 	struct squashfs_dir_entry *dire = NULL;
-	u64 block = squashfs_dir_start(squashfs_i(dir)->start, msblk);
-	int offset = squashfs_i(dir)->offset;
-	int err;
+	s64 block;
+	int offset, err;
 	loff_t length;
 	unsigned int dir_count, size;
 
-	TRACE("Entered squashfs_lookup [%llx:%x]\n", squashfs_i(dir)->start, offset);
+	TRACE("Entered squashfs_lookup [%llx:%x]\n", squashfs_i(inode)->start,
+			squashfs_i(inode)->offset);
 
-	if ((s64)block < 0)
+	if (len > SQUASHFS_NAME_LEN)
+		return ERR_PTR(-ENAMETOOLONG);
+
+	if (i_size_read(dir) == 3)
+		/* The directory is empty, and so there's nothing to do */
+		goto exit_lookup;
+
+	block = squashfs_dir_start(squashfs_i(dir)->start, msblk);
+	if (block < 0)
 		goto data_error;
 
 	dire = kmalloc(sizeof(*dire) + SQUASHFS_NAME_LEN + 1, GFP_KERNEL);
@@ -187,11 +197,7 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 		return ERR_PTR(-ENOMEM);
 	}
 
-	if (len > SQUASHFS_NAME_LEN) {
-		err = -ENAMETOOLONG;
-		goto failed;
-	}
-
+	offset = squashfs_i(dir)->offset;
 	length = get_dir_index_using_name(dir->i_sb, &block, &offset,
 				squashfs_i(dir)->dir_idx_start,
 				squashfs_i(dir)->dir_idx_offset,
@@ -203,7 +209,7 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 		 * Read directory header.
 		 */
 		if (!squashfs_dir_space(dir, length, sizeof(dirh)))
-			goto read_failure;
+			goto data_error;
 
 		err = squashfs_read_metadata(dir->i_sb, &dirh, &block,
 				&offset, sizeof(dirh));
@@ -221,10 +227,8 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 			/*
 			 * Read directory entry.
 			 */
-			if (!squashfs_dir_space(dir, length, sizeof(*dire))) {
-				err = -ENOSPC;
-				goto read_failure;
-			}
+			if (!squashfs_dir_space(dir, length, sizeof(*dire)))
+				goto data_error;
 
 			err = squashfs_read_metadata(dir->i_sb, dire, &block,
 					&offset, sizeof(*dire));
@@ -238,10 +242,8 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 			if (size > SQUASHFS_NAME_LEN)
 				goto data_error;
 
-			if (!squashfs_dir_space(dir, length, size)) {
-				err = -ENOSPC;
-				goto read_failure;
-			}
+			if (!squashfs_dir_space(dir, length, size))
+				goto data_error;
 
 			err = squashfs_read_metadata(dir->i_sb, dire->name,
 					&block, &offset, size);
@@ -280,9 +282,8 @@ data_error:
 	err = -EIO;
 
 read_failure:
-	ERROR("Unable to read directory block [%llx:%x]\n",
-		squashfs_i(dir)->start, squashfs_i(dir)->offset);
-failed:
+	ERROR("Unable to read directory [%llx:%x]\n", squashfs_i(dir)->start,
+			squashfs_i(dir)->offset);
 	kfree(dire);
 	return ERR_PTR(err);
 }

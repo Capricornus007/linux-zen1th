@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Font data from GNU Unifont 15.1.04.
+ */
 /***************************************************************/
 /*                                                             */
 /* Font file modified from                                     */

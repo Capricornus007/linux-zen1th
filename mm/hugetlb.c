@@ -115,7 +115,7 @@ early_param(str, func##args)
 
 /*
  * Protects updates to hugepage_freelists, hugepage_activelist, nr_huge_pages,
- * free_huge_pages, and surplus_huge_pages.
+ * free_huge_pages, surplus_huge_pages, and temporary_huge_pages.
  */
 __cacheline_aligned_in_smp DEFINE_SPINLOCK(hugetlb_lock);
 
@@ -739,26 +739,36 @@ out_of_memory:
  * region_del.  The extra needed entries will be allocated.
  *
  * regions_needed is the out value provided by a previous call to region_chg.
+ * limit is what the caller has accounted for.  If more huge pages would have
+ * to be added, because somebody has deleted from the range since region_chg,
+ * nothing is added and -EAGAIN is returned.
  *
  * Return the number of new huge pages added to the map.  This number is greater
  * than or equal to zero.  If file_region entries needed to be allocated for
  * this operation and we were not able to allocate, it returns -ENOMEM.
- * region_add of regions of length 1 never allocate file_regions and cannot
- * fail; region_chg will always allocate at least 1 entry and a region_add for
- * 1 page will only require at most 1 entry.
+ * Ranges of length 1 never require allocating file_regions and cannot fail
+ * if limit is at least 1; region_chg will always allocate at least 1 entry
+ * and adding 1 page will only require at most 1 entry.
  */
-static long region_add(struct resv_map *resv, long f, long t,
-		       long in_regions_needed, struct hstate *h,
-		       struct hugetlb_cgroup *h_cg)
+static long region_add_limited(struct resv_map *resv, long f, long t,
+		long in_regions_needed, struct hstate *h,
+		struct hugetlb_cgroup *h_cg, long limit)
 {
 	long add = 0, actual_regions_needed = 0;
 
 	spin_lock(&resv->lock);
 retry:
 
-	/* Count how many regions are actually needed to execute this add. */
-	add_reservation_in_range(resv, f, t, NULL, NULL,
-				 &actual_regions_needed);
+	/*
+	 * Count how many regions are actually needed to execute this add.
+	 * Fail if the number of huge pages to add exceeds limit.
+	 */
+	add = add_reservation_in_range(resv, f, t, NULL, NULL,
+				       &actual_regions_needed);
+	if (add > limit) {
+		spin_unlock(&resv->lock);
+		return -EAGAIN;
+	}
 
 	/*
 	 * Check for sufficient descriptors in the cache to accommodate
@@ -792,6 +802,13 @@ retry:
 
 	spin_unlock(&resv->lock);
 	return add;
+}
+
+static long region_add(struct resv_map *resv, long f, long t,
+		long in_regions_needed, struct hstate *h,
+		struct hugetlb_cgroup *h_cg)
+{
+	return region_add_limited(resv, f, t, in_regions_needed, h, h_cg, t - f);
 }
 
 /*
@@ -1343,9 +1360,15 @@ retry_cpuset:
 	return NULL;
 }
 
-static unsigned long available_huge_pages(struct hstate *h)
+static unsigned long persistent_huge_pages(const struct hstate *h)
 {
-	return h->free_huge_pages - h->resv_huge_pages;
+	return h->nr_huge_pages - h->surplus_huge_pages - h->temporary_huge_pages;
+}
+
+static unsigned long persistent_huge_pages_node(const struct hstate *h, int nid)
+{
+	return h->nr_huge_pages_node[nid] - h->surplus_huge_pages_node[nid] -
+	       h->temporary_huge_pages_node[nid];
 }
 
 static struct folio *dequeue_hugetlb_folio(struct hstate *h, gfp_t gfp_mask,
@@ -1432,6 +1455,10 @@ void remove_hugetlb_folio(struct hstate *h, struct folio *folio,
 	if (adjust_surplus) {
 		h->surplus_huge_pages--;
 		h->surplus_huge_pages_node[nid]--;
+	}
+	if (folio_test_hugetlb_temporary(folio)) {
+		h->temporary_huge_pages--;
+		h->temporary_huge_pages_node[nid]--;
 	}
 
 	/*
@@ -1777,12 +1804,13 @@ void free_huge_folio(struct folio *folio)
 		h->resv_huge_pages++;
 
 	if (folio_test_hugetlb_temporary(folio)) {
-		folio_clear_hugetlb_temporary(folio);
 		remove_hugetlb_folio(h, folio, false);
+		folio_clear_hugetlb_temporary(folio);
 		spin_unlock_irqrestore(&hugetlb_lock, flags);
 		update_and_free_hugetlb_folio(h, folio, true);
-	} else if (h->surplus_huge_pages_node[nid]) {
-		/* remove the page from active list */
+	} else if (h->surplus_huge_pages_node[nid] &&
+		   h->free_huge_pages >= h->resv_huge_pages) {
+		/* Free this surplus folio that is not required globally. */
 		remove_hugetlb_folio(h, folio, true);
 		spin_unlock_irqrestore(&hugetlb_lock, flags);
 		update_and_free_hugetlb_folio(h, folio, true);
@@ -1800,9 +1828,15 @@ void free_huge_folio(struct folio *folio)
  */
 static void account_new_hugetlb_folio(struct hstate *h, struct folio *folio)
 {
+	const int nid = folio_nid(folio);
+
 	lockdep_assert_held(&hugetlb_lock);
 	h->nr_huge_pages++;
-	h->nr_huge_pages_node[folio_nid(folio)]++;
+	h->nr_huge_pages_node[nid]++;
+	if (folio_test_hugetlb_temporary(folio)) {
+		h->temporary_huge_pages++;
+		h->temporary_huge_pages_node[nid]++;
+	}
 }
 
 void init_new_hugetlb_folio(struct folio *folio)
@@ -1975,17 +2009,25 @@ static struct folio *remove_pool_hugetlb_folio(struct hstate *h,
 
 	lockdep_assert_held(&hugetlb_lock);
 	for_each_node_mask_to_free(h, nr_nodes, node, nodes_allowed) {
+		if (list_empty(&h->hugepage_freelists[node]))
+			continue;
+
 		/*
 		 * If we're returning unused surplus pages, only examine
-		 * nodes with surplus pages.
+		 * nodes with surplus pages. If we're shrinking the pool, only
+		 * examine nodes with persistent folios.
 		 */
-		if ((!acct_surplus || h->surplus_huge_pages_node[node]) &&
-		    !list_empty(&h->hugepage_freelists[node])) {
-			folio = list_entry(h->hugepage_freelists[node].next,
-					  struct folio, lru);
-			remove_hugetlb_folio(h, folio, acct_surplus);
-			break;
+		if (acct_surplus) {
+			if (!h->surplus_huge_pages_node[node])
+				continue;
+		} else if (!persistent_huge_pages_node(h, node)) {
+			continue;
 		}
+
+		folio = list_first_entry(&h->hugepage_freelists[node],
+					 struct folio, lru);
+		remove_hugetlb_folio(h, folio, acct_surplus);
+		break;
 	}
 
 	return folio;
@@ -2149,12 +2191,6 @@ static struct folio *alloc_surplus_hugetlb_folio(struct hstate *h,
 		return NULL;
 
 	spin_lock_irq(&hugetlb_lock);
-	/*
-	 * nr_huge_pages needs to be adjusted within the same lock cycle
-	 * as surplus_pages, otherwise it might confuse
-	 * persistent_huge_pages() momentarily.
-	 */
-	account_new_hugetlb_folio(h, folio);
 
 	/* The overcommit recheck below can free this folio. */
 	mod_node_page_state(folio_pgdat(folio), NR_HUGETLB, pages_per_huge_page(h));
@@ -2168,11 +2204,18 @@ static struct folio *alloc_surplus_hugetlb_folio(struct hstate *h,
 	 */
 	if (h->surplus_huge_pages >= h->nr_overcommit_huge_pages) {
 		folio_set_hugetlb_temporary(folio);
+		account_new_hugetlb_folio(h, folio);
 		spin_unlock_irq(&hugetlb_lock);
 		free_huge_folio(folio);
 		return NULL;
 	}
 
+	/*
+	 * nr_huge_pages needs to be adjusted within the same lock cycle
+	 * as surplus_pages, otherwise it might confuse
+	 * persistent_huge_pages() momentarily.
+	 */
+	account_new_hugetlb_folio(h, folio);
 	h->surplus_huge_pages++;
 	h->surplus_huge_pages_node[folio_nid(folio)]++;
 
@@ -2194,18 +2237,18 @@ static struct folio *alloc_migrate_hugetlb_folio(struct hstate *h, gfp_t gfp_mas
 	if (!folio)
 		return NULL;
 
+	/*
+	 * Count temporary folios separately so that pool resizing does not
+	 * mistake them for persistent pages.
+	 */
 	spin_lock_irq(&hugetlb_lock);
+	folio_set_hugetlb_temporary(folio);
 	account_new_hugetlb_folio(h, folio);
 	mod_node_page_state(folio_pgdat(folio), NR_HUGETLB, pages_per_huge_page(h));
 	spin_unlock_irq(&hugetlb_lock);
 
 	/* fresh huge pages are frozen */
 	folio_ref_unfreeze(folio, 1);
-	/*
-	 * We do not account these pages as surplus because they are only
-	 * temporary and will be released properly on the last reference
-	 */
-	folio_set_hugetlb_temporary(folio);
 
 	return folio;
 }
@@ -2335,11 +2378,13 @@ static nodemask_t *policy_mbind_nodemask(gfp_t gfp)
  */
 static long surplus_pages_needed(struct hstate *h, long delta, long allocated)
 {
-	long global_free = (long)h->free_huge_pages + allocated;
-	long allowed_free = (long)allowed_mems_nr(h) + allocated;
+	const long available = min(available_huge_pages(h), allowed_mems_nr(h));
 
-	return max((long)h->resv_huge_pages + delta - global_free,
-		   delta - allowed_free);
+	/*
+	 * Restored reservations can still be backed by folios that were not
+	 * freed yet.
+	 */
+	return delta - available - allocated;
 }
 
 /*
@@ -2350,6 +2395,7 @@ static int gather_surplus_pages(struct hstate *h, long delta)
 	__must_hold(&hugetlb_lock)
 {
 	LIST_HEAD(surplus_list);
+	LIST_HEAD(free_list);
 	struct folio *folio, *tmp;
 	int ret;
 	long i;
@@ -2431,14 +2477,26 @@ retry:
 		enqueue_hugetlb_folio(h, folio);
 	}
 free:
-	spin_unlock_irq(&hugetlb_lock);
-
 	/*
-	 * Free unnecessary surplus pages to the buddy allocator.
-	 * Pages have no ref count, call free_huge_folio directly.
+	 * These folios are not required for any reservation. Don't use
+	 * free_huge_folio(), otherwise it might decide to keep them for
+	 * reservations that were restored before the original folios were
+	 * freed.
 	 */
-	list_for_each_entry_safe(folio, tmp, &surplus_list, lru)
-		free_huge_folio(folio);
+	list_for_each_entry_safe(folio, tmp, &surplus_list, lru) {
+		/*
+		 * If the pool was resized concurrently, these folios might now
+		 * count as persistent and we must keep them.
+		 */
+		if (!h->surplus_huge_pages_node[folio_nid(folio)]) {
+			enqueue_hugetlb_folio(h, folio);
+			continue;
+		}
+		remove_hugetlb_folio(h, folio, true);
+		list_add(&folio->lru, &free_list);
+	}
+	spin_unlock_irq(&hugetlb_lock);
+	update_and_free_pages_bulk(h, &free_list);
 	spin_lock_irq(&hugetlb_lock);
 
 	return ret;
@@ -2469,7 +2527,8 @@ static void return_unused_surplus_pages(struct hstate *h,
 	 * Part (or even all) of the reservation could have been backed
 	 * by pre-allocated pages. Only free surplus pages.
 	 */
-	nr_pages = min(unused_resv_pages, h->surplus_huge_pages);
+	nr_pages = min3(unused_resv_pages, h->surplus_huge_pages,
+			available_huge_pages(h));
 
 	/*
 	 * We want to release as many surplus pages as possible, spread
@@ -2651,7 +2710,7 @@ static long vma_del_reservation(struct hstate *h,
  * 1) A reservation was in place and the folio consumed the reservation.
  *    hugetlb_restore_reserve is set in the folio.
  * 2) No reservation was in place for the page, so hugetlb_restore_reserve is
- *    not set.  However, alloc_hugetlb_folio always updates the reserve map.
+ *    not set.  However, alloc_hugetlb_folio may have updated the reserve map.
  *
  * In case 1, free_huge_folio later in the error path will increment the
  * global reserve count.  But, free_huge_folio does not have enough context
@@ -2661,6 +2720,10 @@ static long vma_del_reservation(struct hstate *h,
  * reserve map indicates there is a reservation present.
  *
  * In case 2, simply undo reserve map modifications done by alloc_hugetlb_folio.
+ *
+ * For CoW mappings, allocations using a subpool reservation leave the
+ * flag clear and the reserve map unchanged.  free_huge_folio returns the
+ * reservation to the subpool.
  */
 void restore_reserve_on_error(struct hstate *h, struct vm_area_struct *vma,
 			unsigned long address, struct folio *folio)
@@ -2708,25 +2771,9 @@ void restore_reserve_on_error(struct hstate *h, struct vm_area_struct *vma,
 				folio_set_hugetlb_restore_reserve(folio);
 		} else if (rc < 0) {
 			/*
-			 * Rare out of memory condition from
-			 * vma_needs_reservation call.  Memory allocation is
-			 * only attempted if a new entry is needed.  Therefore,
-			 * this implies there is not an entry in the
-			 * reserve map.
-			 *
-			 * For shared mappings, no entry in the map indicates
-			 * no reservation.  We are done.
+			 * Region cache allocation can fail even if an entry exists.
+			 * Leave the flag and reserve map unchanged.
 			 */
-			if (!(vma->vm_flags & VM_MAYSHARE))
-				/*
-				 * For private mappings, no entry indicates
-				 * a reservation is present.  Since we can
-				 * not add an entry, set hugetlb_restore_reserve
-				 * on the folio so reserve count will be
-				 * incremented when freed.  This reserve will
-				 * be consumed on a subsequent allocation.
-				 */
-				folio_set_hugetlb_restore_reserve(folio);
 		} else {
 			/*
 			 * No reservation present, do nothing
@@ -3175,6 +3222,14 @@ struct folio *alloc_hugetlb_folio(struct vm_area_struct *vma,
 			spin_unlock_irq(&hugetlb_lock);
 		}
 	}
+
+	/*
+	 * Return subpool reservations to the subpool on error. A CoW mapping
+	 * might not have a reserve map, or it might already account for
+	 * another folio at this index.
+	 */
+	if (map_chg != MAP_CHG_REUSE && vma_is_cow_mapping(vma))
+		folio_clear_hugetlb_restore_reserve(folio);
 
 	return folio;
 
@@ -3765,39 +3820,31 @@ static void __init report_hugepages(void)
 
 #ifdef CONFIG_HIGHMEM
 static void try_to_free_low(struct hstate *h, unsigned long count,
-						nodemask_t *nodes_allowed)
+		nodemask_t *nodes_allowed, struct list_head *page_list)
 {
 	int i;
-	LIST_HEAD(page_list);
 
 	lockdep_assert_held(&hugetlb_lock);
 	if (hstate_is_gigantic(h))
 		return;
 
-	/*
-	 * Collect pages to be freed on a list, and free after dropping lock
-	 */
+	/* Collect lowmem pages to free after dropping the lock. */
 	for_each_node_mask(i, *nodes_allowed) {
 		struct folio *folio, *next;
 		struct list_head *freel = &h->hugepage_freelists[i];
 		list_for_each_entry_safe(folio, next, freel, lru) {
-			if (count >= h->nr_huge_pages)
-				goto out;
+			if (count >= persistent_huge_pages(h))
+				return;
 			if (folio_test_highmem(folio))
 				continue;
 			remove_hugetlb_folio(h, folio, false);
-			list_add(&folio->lru, &page_list);
+			list_add(&folio->lru, page_list);
 		}
 	}
-
-out:
-	spin_unlock_irq(&hugetlb_lock);
-	update_and_free_pages_bulk(h, &page_list);
-	spin_lock_irq(&hugetlb_lock);
 }
 #else
 static inline void try_to_free_low(struct hstate *h, unsigned long count,
-						nodemask_t *nodes_allowed)
+		nodemask_t *nodes_allowed, struct list_head *page_list)
 {
 }
 #endif
@@ -3822,8 +3869,7 @@ static int adjust_pool_surplus(struct hstate *h, nodemask_t *nodes_allowed,
 		}
 	} else {
 		for_each_node_mask_to_free(h, nr_nodes, node, nodes_allowed) {
-			if (h->surplus_huge_pages_node[node] <
-					h->nr_huge_pages_node[node])
+			if (persistent_huge_pages_node(h, node))
 				goto found;
 		}
 	}
@@ -3835,7 +3881,6 @@ found:
 	return 1;
 }
 
-#define persistent_huge_pages(h) (h->nr_huge_pages - h->surplus_huge_pages)
 static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 			      nodemask_t *nodes_allowed)
 {
@@ -3873,9 +3918,7 @@ static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 	if (nid != NUMA_NO_NODE) {
 		unsigned long old_count = count;
 
-		count += persistent_huge_pages(h) -
-			 (h->nr_huge_pages_node[nid] -
-			  h->surplus_huge_pages_node[nid]);
+		count += persistent_huge_pages(h) - persistent_huge_pages_node(h, nid);
 		/*
 		 * User may have specified a large count value which caused the
 		 * above calculation to overflow.  In this case, they wanted
@@ -3993,7 +4036,7 @@ static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 	}
 	min_count = h->resv_huge_pages + persistent_huge_pages(h) - persistent_free_count;
 	min_count = max(count, min_count);
-	try_to_free_low(h, min_count, nodes_allowed);
+	try_to_free_low(h, min_count, nodes_allowed, &page_list);
 
 	/*
 	 * Collect pages to be removed on list without dropping lock
@@ -5356,6 +5399,45 @@ unsigned long move_hugetlb_page_tables(struct vm_area_struct *vma,
 	return len + old_addr - old_end;
 }
 
+/* Must be called after rmap removal. */
+void hugetlb_folio_restore_rsv_on_unmap(struct vm_area_struct *vma,
+		struct folio *folio)
+{
+	struct hstate *h = hstate_vma(vma);
+	unsigned long address;
+	long rc;
+
+	/*
+	 * Restore only on the last unmap, otherwise the owner could reuse
+	 * the reservation while the folio is still mapped by a child.
+	 *
+	 * TODO: Handle migration temporarily dropping the mapcount to zero.
+	 * TODO: Prevent reservation reuse before the folio is freed.
+	 */
+	if (!folio_test_anon(folio) || !__vma_private_lock(vma) ||
+	    folio_mapped(folio))
+		return;
+
+	address = vma_anon_address(vma, folio->index, 1);
+	rc = vma_needs_reservation(h, vma, address);
+	if (!rc)
+		vma_end_reservation(h, vma, address);
+	if (rc <= 0)
+		return;
+
+	rc = vma_add_reservation(h, vma, address);
+	if (rc < 0)
+		return;
+
+	/* The restored reservation owns the subpool charge. */
+	hugetlb_set_folio_subpool(folio, NULL);
+
+	/* Account before the VMA can close or fault again. */
+	spin_lock_irq(&hugetlb_lock);
+	h->resv_huge_pages++;
+	spin_unlock_irq(&hugetlb_lock);
+}
+
 static void hugetlb_unmap_range(struct mmu_gather *tlb,
 				struct vm_area_struct *vma, unsigned long start,
 				unsigned long end, struct folio *folio,
@@ -5369,7 +5451,6 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 	spinlock_t *ptl;
 	struct hstate *h = hstate_vma(vma);
 	unsigned long sz = huge_page_size(h);
-	bool adjust_reservation;
 	unsigned long last_addr_mask;
 
 	i_mmap_assert_write_locked(vma->vm_file->f_mapping);
@@ -5380,6 +5461,8 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 	last_addr_mask = hugetlb_mask_last_page(h);
 	address = start;
 	for (; address < end; address += sz) {
+		bool delay_rmap = false;
+
 		ptep = hugetlb_walk(vma, address, sz);
 		if (!ptep) {
 			address |= last_addr_mask;
@@ -5452,58 +5535,45 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 					make_pte_marker(PTE_MARKER_UFFD_WP),
 					sz);
 		hugetlb_count_sub(pages_per_huge_page(h), mm);
-		hugetlb_remove_rmap(folio);
+		/*
+		 * hugetlb_wp() uses mapcount to decide whether an anonymous
+		 * folio can be reused. Delay rmap removal until stale TLB
+		 * entries are gone, unless the mm has no users left.
+		 */
+		if (folio_test_anon(folio) && !tlb->fullmm) {
+			delay_rmap = tlb_can_delay_rmap();
+			/*
+			 * Without delay-rmap support, just flush before
+			 * dropping the PTL. Except with MMU_GATHER_NO_GATHER
+			 * where clearing already flushed the TLB.
+			 */
+			if (!delay_rmap && !IS_ENABLED(CONFIG_MMU_GATHER_NO_GATHER))
+				flush_hugetlb_tlb_range(vma, address, address + sz);
+		}
+		if (!delay_rmap)
+			hugetlb_remove_rmap(folio);
 		spin_unlock(ptl);
 
-		/*
-		 * Restore the reservation for anonymous page, otherwise the
-		 * backing page could be stolen by someone. Restore only on the
-		 * last unmap, otherwise the owner could empty its resv map
-		 * while the folio is still mapped by a child. Note that holding
-		 * i_mmap_lock_write is needed to check the number of mappings.
-		 * If there we are freeing a surplus, do not set the restore
-		 * reservation bit.
-		 */
-		adjust_reservation = false;
+		if (!delay_rmap)
+			hugetlb_folio_restore_rsv_on_unmap(vma, folio);
 
-		spin_lock_irq(&hugetlb_lock);
-		if (!h->surplus_huge_pages && __vma_private_lock(vma) &&
-		    !folio_mapped(folio) && folio_test_anon(folio)) {
-			folio_set_hugetlb_restore_reserve(folio);
-			/* Reservation to be adjusted after the spin lock */
-			adjust_reservation = true;
+		if (__tlb_remove_page_size(tlb, folio_page(folio, 0), sz,
+					   delay_rmap)) {
+			tlb_flush_mmu_tlbonly(tlb);
+			tlb_flush_rmaps(tlb, vma);
+			tlb_flush_mmu(tlb);
 		}
-		spin_unlock_irq(&hugetlb_lock);
-
-		/*
-		 * Adjust the reservation for the region that will have the
-		 * reserve restored. Keep in mind that vma_needs_reservation() changes
-		 * resv->adds_in_progress if it succeeds. If this is not done,
-		 * do_exit() will not see it, and will keep the reservation
-		 * forever.
-		 */
-		if (adjust_reservation) {
-			int rc = vma_needs_reservation(h, vma, address);
-
-			if (rc < 0)
-				/* Presumably allocate_file_region_entries failed
-				 * to allocate a file_region struct. Clear
-				 * hugetlb_restore_reserve so that global reserve
-				 * count will not be incremented by free_huge_folio.
-				 * Act as if we consumed the reservation.
-				 */
-				folio_clear_hugetlb_restore_reserve(folio);
-			else if (rc)
-				vma_add_reservation(h, vma, address);
-		}
-
-		tlb_remove_page_size(tlb, folio_page(folio, 0),
-				     folio_size(folio));
 		/*
 		 * If we were instructed to unmap a specific folio, we're done.
 		 */
 		if (folio_provided)
 			break;
+	}
+
+	if (tlb->delayed_rmap) {
+		tlb_flush_mmu_tlbonly(tlb);
+		tlb_flush_rmaps(tlb, vma);
+		tlb_flush_mmu(tlb);
 	}
 }
 
@@ -5929,6 +5999,7 @@ static bool hugetlb_pte_stable(struct hstate *h, struct mm_struct *mm, unsigned 
 static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 			struct vm_fault *vmf)
 {
+	const bool pagecache_folio = vmf->vma->vm_flags & VM_MAYSHARE;
 	u32 hash = hugetlb_fault_mutex_hash(mapping, vmf->pgoff);
 	bool new_folio, new_anon_folio = false;
 	struct vm_area_struct *vma = vmf->vma;
@@ -5937,7 +6008,6 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 	vm_fault_t ret = VM_FAULT_SIGBUS;
 	bool folio_locked = true;
 	struct folio *folio;
-	unsigned long size;
 	pte_t new_pte;
 
 	/*
@@ -5959,8 +6029,7 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 	new_folio = false;
 	folio = filemap_lock_hugetlb_folio(h, mapping, vmf->pgoff);
 	if (IS_ERR(folio)) {
-		size = i_size_read(mapping->host) >> huge_page_shift(h);
-		if (vmf->pgoff >= size)
+		if (!hugetlb_pgoff_valid(mapping, vmf->pgoff, /* partial= */ false))
 			goto out;
 		/* Check for page in userfault range */
 		if (userfaultfd_missing(vma)) {
@@ -5990,10 +6059,17 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 							VM_UFFD_MISSING);
 		}
 
-		if (!(vma->vm_flags & VM_MAYSHARE)) {
+		if (!pagecache_folio) {
 			ret = __vmf_anon_prepare(vmf);
 			if (unlikely(ret))
 				goto out;
+		} else {
+			/* Recheck EOF before consuming an inode reservation. */
+			filemap_invalidate_lock_shared(mapping);
+			if (!hugetlb_pgoff_valid(mapping, vmf->pgoff, /* partial= */ false)) {
+				filemap_invalidate_unlock_shared(mapping);
+				goto out;
+			}
 		}
 
 		folio = alloc_hugetlb_folio(vma, vmf->address, false);
@@ -6014,13 +6090,15 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 				ret = vmf_error(PTR_ERR(folio));
 			else
 				ret = 0;
+			if (pagecache_folio)
+				filemap_invalidate_unlock_shared(mapping);
 			goto out;
 		}
 		folio_zero_user(folio, vmf->real_address);
 		__folio_mark_uptodate(folio);
 		new_folio = true;
 
-		if (vma->vm_flags & VM_MAYSHARE) {
+		if (pagecache_folio) {
 			int err = hugetlb_add_to_page_cache(folio, mapping,
 							vmf->pgoff);
 			if (err) {
@@ -6035,8 +6113,10 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 							folio);
 				folio_put(folio);
 				ret = VM_FAULT_SIGBUS;
+				filemap_invalidate_unlock_shared(mapping);
 				goto out;
 			}
+			filemap_invalidate_unlock_shared(mapping);
 		} else {
 			new_anon_folio = true;
 			folio_lock(folio);
@@ -6461,14 +6541,15 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 			     uffd_flags_t flags,
 			     struct folio **foliop)
 {
+	const int vm_shared = dst_vma->vm_flags & VM_SHARED;
+	const bool is_continue = uffd_flags_mode_is(flags, MFILL_ATOMIC_CONTINUE);
+	const bool alloc_pagecache_folio = vm_shared && !is_continue;
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
-	bool is_continue = uffd_flags_mode_is(flags, MFILL_ATOMIC_CONTINUE);
 	bool wp_enabled = (flags & MFILL_ATOMIC_WP);
 	struct hstate *h = hstate_vma(dst_vma);
 	struct address_space *mapping = dst_vma->vm_file->f_mapping;
 	pgoff_t idx = vma_hugecache_offset(h, dst_vma, dst_addr);
 	unsigned long size = huge_page_size(h);
-	int vm_shared = dst_vma->vm_flags & VM_SHARED;
 	pte_t _dst_pte;
 	spinlock_t *ptl;
 	int ret = -ENOMEM;
@@ -6494,6 +6575,18 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 
 		spin_unlock(ptl);
 		return 0;
+	}
+
+	if (alloc_pagecache_folio) {
+		filemap_invalidate_lock_shared(mapping);
+		if (!hugetlb_pgoff_valid(mapping, idx, /* partial= */ false)) {
+			if (*foliop) {
+				folio_put(*foliop);
+				*foliop = NULL;
+			}
+			ret = -EFAULT;
+			goto out;
+		}
 	}
 
 	if (is_continue) {
@@ -6593,11 +6686,7 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 		WARN_ON_ONCE(!folio_test_uptodate(folio));
 
 	/* Add shared, newly allocated pages to the page cache. */
-	if (vm_shared && !is_continue) {
-		ret = -EFAULT;
-		if (idx >= (i_size_read(mapping->host) >> huge_page_shift(h)))
-			goto out_release_nounlock;
-
+	if (alloc_pagecache_folio) {
 		/*
 		 * Serialization between remove_inode_hugepages() and
 		 * hugetlb_add_to_page_cache() below happens through the
@@ -6668,6 +6757,8 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 	spin_unlock(ptl);
 	ret = 0;
 out:
+	if (alloc_pagecache_folio)
+		filemap_invalidate_unlock_shared(mapping);
 	return ret;
 out_release_unlock:
 	spin_unlock(ptl);
@@ -6868,7 +6959,7 @@ long hugetlb_reserve_pages(struct inode *inode,
 	struct resv_map *resv_map;
 	struct hugetlb_cgroup *h_cg = NULL;
 	long gbl_reserve, regions_needed = 0;
-	int err;
+	int err, retries = 0;
 
 	/* This should never happen */
 	if (from > to) {
@@ -6890,6 +6981,7 @@ long hugetlb_reserve_pages(struct inode *inode,
 	if (vma_flags_test(&vma_flags, VMA_NORESERVE_BIT))
 		return 0;
 
+retry:
 	/*
 	 * Shared mappings base their reservation on the number of pages that
 	 * are already allocated on behalf of the file. Private mappings need
@@ -6968,7 +7060,8 @@ long hugetlb_reserve_pages(struct inode *inode,
 	 * else has to be done for private mappings here
 	 */
 	if (!vma || vma_test(vma, VMA_MAYSHARE_BIT)) {
-		add = region_add(resv_map, from, to, regions_needed, h, h_cg);
+		add = region_add_limited(resv_map, from, to, regions_needed, h,
+					 h_cg, chg);
 
 		if (unlikely(add < 0)) {
 			hugetlb_acct_memory(h, -gbl_reserve);
@@ -7031,17 +7124,28 @@ out_uncharge_cgroup:
 	hugetlb_cgroup_uncharge_cgroup_rsvd(hstate_index(h),
 					    chg * pages_per_huge_page(h), h_cg);
 out_err:
-	hugetlb_vma_lock_free(vma);
-	if (!vma || vma_test(vma, VMA_MAYSHARE_BIT))
+	if (!vma || vma_test(vma, VMA_MAYSHARE_BIT)) {
 		/* Only call region_abort if the region_chg succeeded but the
 		 * region_add failed or didn't run.
 		 */
 		if (chg >= 0 && add < 0)
 			region_abort(resv_map, from, to, regions_needed);
-	if (vma && is_vma_resv_set(vma, HPAGE_RESV_OWNER)) {
+		/*
+		 * A concurrent rollback removed entries after region_chg()
+		 * counted the range, so we charged for too few pages and
+		 * have to recount, recharge, and try again. Limit retries
+		 * to avoid livelock under repeated rollbacks.
+		 */
+		if (err == -EAGAIN) {
+			if (retries++ < 10)
+				goto retry;
+			err = -ENOMEM;
+		}
+	} else if (is_vma_resv_set(vma, HPAGE_RESV_OWNER)) {
 		kref_put(&resv_map->refs, resv_map_release);
 		set_vma_resv_map(vma, NULL);
 	}
+	hugetlb_vma_lock_free(vma);
 	return err;
 }
 
@@ -7541,9 +7645,8 @@ void move_hugetlb_state(struct folio *old_folio, struct folio *new_folio,
 	 * be final while the old one will be freed so it takes over
 	 * the temporary status.
 	 *
-	 * Also note that we have to transfer the per-node surplus state
-	 * here as well otherwise the global surplus count will not match
-	 * the per-node's.
+	 * Transfer the per-node temporary count to the old folio's node,
+	 * and any surplus count in the opposite direction.
 	 */
 	if (folio_test_hugetlb_temporary(new_folio)) {
 		int old_nid = folio_nid(old_folio);
@@ -7552,13 +7655,14 @@ void move_hugetlb_state(struct folio *old_folio, struct folio *new_folio,
 		folio_set_hugetlb_temporary(old_folio);
 		folio_clear_hugetlb_temporary(new_folio);
 
-
 		/*
-		 * There is no need to transfer the per-node surplus state
-		 * when we do not cross the node.
+		 * There is no need to transfer the per-node state when we do
+		 * not cross the node.
 		 */
 		if (new_nid != old_nid) {
 			spin_lock_irq(&hugetlb_lock);
+			h->temporary_huge_pages_node[new_nid]--;
+			h->temporary_huge_pages_node[old_nid]++;
 			if (h->surplus_huge_pages_node[old_nid]) {
 				h->surplus_huge_pages_node[old_nid]--;
 				h->surplus_huge_pages_node[new_nid]++;

@@ -709,10 +709,8 @@ static void init_host_aspm(struct tegra_pcie_dw *pcie)
 
 	/* Program L0s and L1 entrance latencies */
 	val = dw_pcie_readl_dbi(pci, PORT_AFAC);
-	FIELD_MODIFY(PORT_AFAC_L0S_ELM, &val,
-		     pcie->aspm_l0s_enter_lat);
-	FIELD_MODIFY(PORT_AFAC_L1_ELM, &val,
-		     pcie->aspm_l1_enter_lat);
+	FIELD_MODIFY(PORT_AFAC_L0S_ELM, &val, pcie->aspm_l0s_enter_lat);
+	FIELD_MODIFY(PORT_AFAC_L1_ELM, &val, pcie->aspm_l1_enter_lat);
 	val |= PORT_AFAC_ENTER_ASPM;
 	dw_pcie_writel_dbi(pci, PORT_AFAC, val);
 }

@@ -513,8 +513,9 @@ static int ntfs_write_volume_flags(struct ntfs_volume *vol,
 		goto done;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto put_unm_err_out;
 	}
 
@@ -655,8 +656,9 @@ int ntfs_write_volume_label(struct ntfs_volume *vol, char *label)
 
 	mutex_lock(&vol_ni->mrec_lock);
 	ctx = ntfs_attr_get_search_ctx(vol_ni, NULL);
-	if (!ctx) {
-		ret = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -1241,6 +1243,14 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			++index;
 		}
 
+		/*
+		 * Windows 10 may leave mirror records beyond the system files
+		 * stale.  Read the full mirror to map its runlist, but only
+		 * compare the system records, as ntfs-3g does.
+		 */
+		if (i >= FILE_first_user)
+			goto next_record;
+
 		/* Do not check the record if it is not in use. */
 		if (((struct mft_record *)kmft)->flags & MFT_RECORD_IN_USE) {
 			/* Make sure the record is ok. */
@@ -1284,6 +1294,7 @@ mft_unmap_out:
 				   i);
 			goto mm_unmap_out;
 		}
+next_record:
 		kmft += vol->mft_record_size;
 		kmirr += vol->mft_record_size;
 	} while (++i < vol->mftmirr_size);
@@ -1839,8 +1850,10 @@ iput_volume_failed:
 	}
 
 	ctx = ntfs_attr_get_search_ctx(NTFS_I(vol->vol_ino), m);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
 		ntfs_error(sb, "Failed to get attribute search context.");
+		ctx = NULL;
 		goto get_ctx_vol_failed;
 	}
 

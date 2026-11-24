@@ -444,14 +444,6 @@ static void con_putc(struct vc_data *vc, u16 ca, unsigned int y, unsigned int x)
 		vc->vc_sw->con_putcs(vc, &ca, 1, y, x);
 }
 
-static inline u16 *screenpos_utf8(const struct vc_data *vc, int offset,
-		bool viewed)
-{
-	unsigned long origin = viewed ? vc->vc_visible_origin : vc->vc_origin;
-
-	return (u16 *)(origin + offset + vc->vc_screenbuf_size);
-}
-
 /* Called  from the keyboard irq path.. */
 static inline void scrolldelta(int lines)
 {
@@ -747,10 +739,6 @@ static void con_scroll(struct vc_data *vc, unsigned int top,
 	}
 	scr_memmovew(dst, src, (rows - nr) * vc->vc_size_row);
 	scr_memsetw(clear, vc->vc_video_erase_char, vc->vc_size_row * nr);
-	dst += (vc->vc_screenbuf_size >> 1);
-	src += (vc->vc_screenbuf_size >> 1);
-	scr_memmovew(dst, src, (rows - nr) * vc->vc_size_row);
-	scr_memsetw(clear, 0, vc->vc_size_row * nr);
 }
 
 static void do_update_region(struct vc_data *vc, unsigned long start, int count)
@@ -909,7 +897,6 @@ void complement_pos(struct vc_data *vc, int offset)
 {
 	static int old_offset = -1;
 	static unsigned short old;
-	static unsigned short old_utf;
 	static unsigned short oldx, oldy;
 
 	WARN_CONSOLE_UNLOCKED();
@@ -918,7 +905,7 @@ void complement_pos(struct vc_data *vc, int offset)
 	    old_offset < vc->vc_screenbuf_size) {
 		scr_writew(old, screenpos(vc, old_offset, true));
 		if (con_should_update(vc))
-		con_putc(vc, (old_utf << 16) | old, oldy, oldx);
+			con_putc(vc, old, oldy, oldx);
 		notify_update(vc);
 	}
 
@@ -928,15 +915,13 @@ void complement_pos(struct vc_data *vc, int offset)
 	    offset < vc->vc_screenbuf_size) {
 		unsigned short new;
 		u16 *p = screenpos(vc, offset, true);
-		u16 *p_utf = screenpos(vc, offset, true);
 		old = scr_readw(p);
-		old_utf = scr_readw(p_utf);
 		new = old ^ vc->vc_complement_mask;
 		scr_writew(new, p);
 		if (con_should_update(vc)) {
 			oldx = (offset >> 1) % vc->vc_cols;
 			oldy = (offset >> 1) / vc->vc_cols;
-			con_putc(vc, (old_utf << 16) | new, oldy, oldx);
+			con_putc(vc, new, oldy, oldx);
 		}
 		notify_update(vc);
 	}
@@ -1247,7 +1232,7 @@ int vc_allocate(unsigned int currcons)	/* return 0 on success */
 	    vc->vc_screenbuf_size > KMALLOC_MAX_SIZE || !vc->vc_screenbuf_size)
 		goto err_free;
 	err = -ENOMEM;
-	vc->vc_screenbuf = kzalloc(vc->vc_screenbuf_size * 2, GFP_KERNEL);
+	vc->vc_screenbuf = kzalloc(vc->vc_screenbuf_size, GFP_KERNEL);
 	if (!vc->vc_screenbuf)
 		goto err_free;
 
@@ -1303,7 +1288,6 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 	unsigned long old_origin, new_origin, new_scr_end, rlth, rrem, err = 0;
 	unsigned long end;
 	unsigned int old_rows, old_row_size, first_copied_row;
-	unsigned int old_screen_size;
 	unsigned int new_cols, new_rows, new_row_size, new_screen_size;
 	unsigned short *oldscreen, *newscreen;
 	u32 **new_uniscr = NULL;
@@ -1340,7 +1324,7 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 
 	if (new_screen_size > KMALLOC_MAX_SIZE || !new_screen_size)
 		return -EINVAL;
-	newscreen = kzalloc(new_screen_size * 2, GFP_USER);
+	newscreen = kzalloc(new_screen_size, GFP_USER);
 	if (!newscreen)
 		return -ENOMEM;
 
@@ -1357,7 +1341,6 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 
 	old_rows = vc->vc_rows;
 	old_row_size = vc->vc_size_row;
-	old_screen_size = old_row_size * old_rows;
 
 	err = resize_screen(vc, new_cols, new_rows, from_user);
 	if (err) {
@@ -1406,23 +1389,15 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 	while (old_origin < end) {
 		scr_memcpyw((unsigned short *) new_origin,
 			    (unsigned short *) old_origin, rlth);
-		scr_memcpyw((unsigned short *) new_origin + (new_screen_size >> 1),
-			    (unsigned short *) old_origin + (old_screen_size >> 1), rlth);
-		if (rrem) {
+		if (rrem)
 			scr_memsetw((void *)(new_origin + rlth),
 				    vc->vc_video_erase_char, rrem);
-			scr_memsetw((void *)(new_origin + rlth + (new_screen_size)),
-				    vc->vc_video_erase_char, rrem);
-		}
 		old_origin += old_row_size;
 		new_origin += new_row_size;
 	}
-	if (new_scr_end > new_origin) {
+	if (new_scr_end > new_origin)
 		scr_memsetw((void *)new_origin, vc->vc_video_erase_char,
 			    new_scr_end - new_origin);
-		scr_memsetw((void *)new_origin + (new_screen_size), vc->vc_video_erase_char,
-			    new_scr_end - new_origin);
-	}
 	oldscreen = vc->vc_screenbuf;
 	vc->vc_screenbuf = newscreen;
 	vc->vc_screenbuf_size = new_screen_size;
@@ -3235,6 +3210,40 @@ static void vc_con_rewind(struct vc_data *vc)
 #define UCS_VS16	0xfe0f	/* Variation Selector 16 */
 #define UCS_REPLACEMENT	0xfffd	/* Replacement Character */
 
+#ifdef CONFIG_FONT_CJK
+/* Console lock held; zero means that this cell uses the ordinary font. */
+u32 vc_uniscr_get_cjk(const struct vc_data *vc, unsigned int row,
+		      unsigned int col, bool *continuation)
+{
+	u32 uc;
+	u16 *p, mask = vc->vc_hi_font_mask | 0xff;
+	int glyph, charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
+
+	*continuation = false;
+	if (!vc->vc_utf || !vc->vc_uni_lines ||
+	    row >= vc->vc_rows || col >= vc->vc_cols)
+		return 0;
+	uc = vc->vc_uni_lines[row][col];
+	p = screenpos(vc, row * vc->vc_size_row + col * 2, false);
+	if ((vcs_scr_readw(vc, p) & mask) == 0xfe && uc == UCS_ZWS) {
+		*continuation = true;
+		if (!col || (vcs_scr_readw(vc, p - 1) & mask) != 0xff)
+			return UCS_ZWS;
+		uc = vc->vc_uni_lines[row][col - 1];
+	} else if ((vcs_scr_readw(vc, p) & mask) != 0xff) {
+		return 0;
+	}
+	if (uc <= 0xff || uc == UCS_ZWS)
+		return *continuation ? UCS_ZWS : 0;
+	glyph = conv_uni_to_pc((struct vc_data *)vc, uc);
+	if (glyph == -1 || (glyph >= 0 && glyph <= charmask &&
+			   glyph < vc->vc_font.charcount))
+		return *continuation ? UCS_ZWS : 0;
+	return uc;
+}
+EXPORT_SYMBOL_GPL(vc_uniscr_get_cjk);
+#endif
+
 static int vc_process_ucs(struct vc_data *vc, int *c, int *tc)
 {
 	u32 prev_c, curr_c = *c;
@@ -3341,6 +3350,7 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 	u16 himask = vc->vc_hi_font_mask;
 	u8 width = 1;
 	bool inverse = false;
+	bool cjk = IS_ENABLED(CONFIG_FONT_CJK) && !vc_uniscr_check(vc);
 
 	if (vc->vc_utf && !vc->vc_disp_ctrl) {
 		width = vc_process_ucs(vc, &c, &tc);
@@ -3349,11 +3359,18 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 	}
 
 	/* Now try to find out how to display it */
-	tc = vc_get_glyph(vc, tc);
+	if (cjk && c > 0xff) {
+		tc = conv_uni_to_pc(vc, tc);
+		cjk = tc < -1 || tc > (himask ? 0x1ff : 0xff) ||
+		      tc >= (int)vc->vc_font.charcount;
+		if (cjk)
+			tc = 0xff;
+	} else {
+		cjk = false;
+		tc = vc_get_glyph(vc, tc);
+	}
 	if (tc == -1)
 		return -1; /* nothing to display */
-	if (c > 0xff)
-		tc = 0xff; /* nothing to display */
 	if (tc < 0) {
 		inverse = true;
 		tc = conv_uni_to_pc(vc, '?');
@@ -3364,10 +3381,13 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 		con_flush(vc, draw);
 	}
 
-	next_c = (c <= 0xffff) ? c : 0xfffd;
-	if (width == 2 && !vc->vc_need_wrap && vc->state.x == vc->vc_cols - 1) {
-		vc->vc_need_wrap = vc->vc_decawm;
-		draw->to = vc->vc_pos + 2;
+	next_c = c;
+	if (IS_ENABLED(CONFIG_FONT_CJK)) {
+		if (width == 2 && !vc->vc_need_wrap &&
+		    vc->state.x == vc->vc_cols - 1) {
+			vc->vc_need_wrap = vc->vc_decawm;
+			draw->to = vc->vc_pos + 2;
+		}
 	}
 	while (1) {
 		if (vc->vc_need_wrap || vc->vc_decim)
@@ -3386,7 +3406,6 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 		tc |= (vc_attr << 8) & ~himask;
 
 		scr_writew(tc, (u16 *)vc->vc_pos);
-		scr_writew(next_c, (u16 *)vc->vc_pos + (vc->vc_screenbuf_size >> 1));
 
 		if (con_should_update(vc) && draw->x < 0) {
 			draw->x = vc->state.x;
@@ -3403,13 +3422,14 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 		if (!--width)
 			break;
 
-		tc = 0xfe;
-		continue;
-
-		/* A space is printed in the second column */
-		tc = conv_uni_to_pc(vc, ' ');
-		if (tc < 0)
-			tc = ' ';
+		if (cjk) {
+			tc = 0xfe;
+		} else {
+			/* A space is printed in the second column */
+			tc = conv_uni_to_pc(vc, ' ');
+			if (tc < 0)
+				tc = ' ';
+		}
 		/*
 		 * Store a zero-width space in the Unicode screen given that
 		 * the previous code point is semantically double width.
@@ -3454,8 +3474,6 @@ static int do_con_write(struct tty_struct *tty, const u8 *buf, int count)
 	if (con_is_fg(vc))
 		hide_cursor(vc);
 
-	vc->vc_utf = 1;
-	vc->vc_disp_ctrl = 0;
 	param.vc = vc;
 
 	while (!tty->flow.stopped && count) {
@@ -4042,7 +4060,7 @@ static int __init con_init(void)
 		tty_port_init(&vc->port);
 		visual_init(vc, currcons, true);
 		/* Assuming vc->vc_{cols,rows,screenbuf_size} are sane here. */
-		vc->vc_screenbuf = kzalloc(vc->vc_screenbuf_size * 2, GFP_NOWAIT);
+		vc->vc_screenbuf = kzalloc(vc->vc_screenbuf_size, GFP_NOWAIT);
 		vc_init(vc, currcons || !vc->vc_sw->con_save_screen);
 	}
 	currcons = fg_console = 0;
@@ -5209,10 +5227,7 @@ u16 screen_glyph(const struct vc_data *vc, int offset)
 {
 	u16 w = scr_readw(screenpos(vc, offset, true));
 	u16 c = w & 0xff;
-	u16 c_utf = scr_readw(screenpos_utf8(vc, offset, true));
 
-	if ((c == 0xff || c == 0xfe) && c_utf)
-		return c_utf;
 	if (w & vc->vc_hi_font_mask)
 		c |= 0x100;
 	return c;
@@ -5260,6 +5275,18 @@ u16 vcs_scr_readw(const struct vc_data *vc, const u16 *org)
 
 void vcs_scr_writew(struct vc_data *vc, u16 val, u16 *org)
 {
+	unsigned long addr = (unsigned long)org;
+	u16 mask = vc->vc_hi_font_mask | 0xff;
+
+	if (IS_ENABLED(CONFIG_FONT_CJK) && vc->vc_uni_lines &&
+	    ((vcs_scr_readw(vc, org) ^ val) & mask) &&
+	    addr >= vc->vc_origin && addr < vc->vc_scr_end) {
+		unsigned int offset = addr - vc->vc_origin;
+		u16 glyph = (val & 0xff) | ((val & vc->vc_hi_font_mask) ? 0x100 : 0);
+
+		vc->vc_uni_lines[offset / vc->vc_size_row][offset % vc->vc_size_row / 2] =
+			inverse_translate(vc, glyph, true);
+	}
 	scr_writew(val, org);
 	if ((unsigned long)org == vc->vc_pos) {
 		softcursor_original = -1;

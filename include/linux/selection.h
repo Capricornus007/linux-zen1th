@@ -46,6 +46,17 @@ void vcs_scr_writew(struct vc_data *vc, u16 val, u16 *org);
 void vcs_scr_updated(struct vc_data *vc);
 
 int vc_uniscr_check(struct vc_data *vc);
+#ifdef CONFIG_FONT_CJK
+u32 vc_uniscr_get_cjk(const struct vc_data *vc, unsigned int row,
+		      unsigned int col, bool *continuation);
+#else
+static inline u32 vc_uniscr_get_cjk(const struct vc_data *vc, unsigned int row,
+				   unsigned int col, bool *continuation)
+{
+	*continuation = false;
+	return 0;
+}
+#endif
 void vc_uniscr_copy_line(const struct vc_data *vc, void *dest, bool viewed,
 			 unsigned int row, unsigned int col, unsigned int nr);
 
