@@ -117,34 +117,11 @@ jobs:
           grep -qE '^(usr/lib|lib)/modules/.*/build$' <<<"$hlisting" || { echo "headers 缺 lib/modules/.../build"; exit 1; }
           ls -l /home/builder/src/*.pkg.tar.zst
           du -h /home/builder/src/*.pkg.tar.zst | awk '{print $1, $2}'
-      - name: 清理 current-kernel 旧资源（current 只留最新一对）
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          cd /home/builder/src
-          python3 ci/release-manage.py clean-current
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: SHA256SUMS
         if: steps.check.outputs.skip != 'true'
         run: |
           cd /home/builder/src
           sha256sum linux-zen1th-*.pkg.tar.zst > SHA256SUMS-kernel
-      - name: 發佈到 current-kernel release（仅本次最新一对 + SHA256）
-        if: steps.check.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: current-kernel
-          name: linux-zen1th current（UTC+8 自動重建）
-          body: merge-bot 整合完成自動構建。current 只保留最新一對，歷史見各版本 tag。SHA256 見附檔。
-          # 2026-11-24 修源頭：本 CI 從無 GPG 簽名步驟、也無簽名 secret，
-          # *.sig 從未生成；本機 /etc/pacman.conf 是 SigLevel=Never，自建倉不依赖簽名。
-          # 去掉不存在的 .sig glob，避免 release 附檔列表含幽靈項。
-          files: |
-            /home/builder/src/linux-zen1th-*.pkg.tar.zst
-            /home/builder/src/SHA256SUMS-kernel
-          make_latest: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 建立 zen1th pacman 仓库 DB（repo-add，本仓直接可供 pacman -Syu）
         if: steps.check.outputs.skip != 'true'
         run: |
