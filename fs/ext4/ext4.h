@@ -3336,7 +3336,7 @@ struct buffer_head *ext4_sb_getblk(struct super_block *sb, ext4_fsblk_t block);
 struct buffer_head *ext4_sb_find_get_block(struct super_block *sb,
 					   ext4_fsblk_t block);
 struct buffer_head *ext4_sb_find_get_block_nonatomic(struct super_block *sb,
-						  ext4_fsblk_t block);
+						     ext4_fsblk_t block);
 struct buffer_head *ext4_sb_getblk_unmovable(struct super_block *sb,
 					     ext4_fsblk_t block);
 #if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)

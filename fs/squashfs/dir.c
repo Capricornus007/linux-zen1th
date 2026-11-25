@@ -79,10 +79,11 @@ static unsigned int get_dir_index_using_offset(struct super_block *sb,
 
 		/* Sanity check the directory index contents */
 
-		/* size should never be larger than SQUASHFS_NAME_LEN */
-		size = le32_to_cpu(dir_index.size) + 1;
-		if (size > SQUASHFS_NAME_LEN)
+		/* size should never be larger than SQUASHFS_DISK_NAME_LEN */
+		size = le32_to_cpu(dir_index.size);
+		if (size > SQUASHFS_DISK_NAME_LEN)
 			break;
+		++ size;
 
 		/* The stored index should not be larger than max_index */
 		index = le32_to_cpu(dir_index.index);
@@ -226,13 +227,13 @@ static int squashfs_readdir(struct file *file, struct dir_context *ctx)
 				goto failed_read;
 
 			length += sizeof(*dire);
-			size = le16_to_cpu(dire->size) + 1;
+			size = le16_to_cpu(dire->size);
 
-			/* size should never be larger than SQUASHFS_NAME_LEN */
-			if (size > SQUASHFS_NAME_LEN)
+			/* size should never be larger than SQUASHFS_DISK_NAME_LEN */
+			if (size > SQUASHFS_DISK_NAME_LEN)
 				goto failed_read;
 
-			if (!squashfs_dir_space(inode, length, size))
+			if (!squashfs_dir_space(inode, length, ++ size))
 				goto failed_read;
 
 			err = squashfs_read_metadata(inode->i_sb, dire->name,
@@ -262,9 +263,8 @@ static int squashfs_readdir(struct file *file, struct dir_context *ctx)
 		}
 	}
 
-	kfree(dire);
-
 finish:
+	kfree(dire);
 	return 0;
 
 failed_read:

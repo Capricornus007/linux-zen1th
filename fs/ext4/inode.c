@@ -1128,7 +1128,7 @@ struct buffer_head *ext4_sb_find_get_block(struct super_block *sb,
 EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_sb_find_get_block);
 
 struct buffer_head *ext4_sb_find_get_block_nonatomic(struct super_block *sb,
-						  ext4_fsblk_t block)
+						     ext4_fsblk_t block)
 {
 	KUNIT_STATIC_STUB_REDIRECT(ext4_sb_find_get_block_nonatomic, sb, block);
 	return sb_find_get_block_nonatomic(sb, block);

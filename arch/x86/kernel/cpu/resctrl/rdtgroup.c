@@ -10,7 +10,7 @@
  * Software Developer Manual.
  */
 
-#define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
+#define pr_fmt(fmt)	"resctrl: " fmt
 
 #include <linux/cpu.h>
 #include <linux/debugfs.h>
@@ -96,7 +96,7 @@ void resctrl_arch_mon_event_config_read(void *_config_info)
 		pr_warn_once("Invalid event id %d\n", config_info->evtid);
 		return;
 	}
-	msrval = rdmsrq(MSR_IA32_EVT_CFG_BASE + index);
+	msrval = rdmsrq(MSR_AMD64_EVT_CFG_BASE + index);
 
 	/* Report only the valid event configuration bits */
 	config_info->mon_config = msrval & MAX_EVT_CONFIG_BITS;
@@ -112,7 +112,7 @@ void resctrl_arch_mon_event_config_write(void *_config_info)
 		pr_warn_once("Invalid event id %d\n", config_info->evtid);
 		return;
 	}
-	wrmsrq(MSR_IA32_EVT_CFG_BASE + index, config_info->mon_config);
+	wrmsrq(MSR_AMD64_EVT_CFG_BASE + index, config_info->mon_config);
 }
 
 static void l3_qos_cfg_update(void *arg)

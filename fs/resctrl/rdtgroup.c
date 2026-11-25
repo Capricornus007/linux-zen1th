@@ -10,7 +10,7 @@
  * Software Developer Manual.
  */
 
-#define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
+#define pr_fmt(fmt)	"resctrl: " fmt
 
 #include <linux/cpu.h>
 #include <linux/debugfs.h>
@@ -1792,8 +1792,8 @@ static void mbm_config_write_domain(struct rdt_resource *r,
 	mon_info.mon_config = val;
 
 	/*
-	 * Update MSR_IA32_EVT_CFG_BASE MSR on one of the CPUs in the
-	 * domain. The MSRs offset from MSR MSR_IA32_EVT_CFG_BASE
+	 * Update MSR_AMD64_EVT_CFG_BASE on one of the CPUs in the
+	 * domain. The MSRs offset from MSR_AMD64_EVT_CFG_BASE
 	 * are scoped at the domain level. Writing any of these MSRs
 	 * on one CPU is observed by all the CPUs in the domain.
 	 */

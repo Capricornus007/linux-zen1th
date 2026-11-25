@@ -268,6 +268,7 @@ struct fastrpc_invoke_ctx {
 	int pid;
 	int client_id;
 	u32 sc;
+	u32 handle;
 	u64 *fdlist;
 	u32 *crc;
 	/* Poll memory that DSP updates */
@@ -278,6 +279,8 @@ struct fastrpc_invoke_ctx {
 	bool is_work_done;
 	/* process updates poll memory instead of glink response */
 	bool is_polled;
+	/* set once put_work has been scheduled for this ctx, guarded by fl->lock */
+	bool put_work_scheduled;
 	struct kref refcount;
 	struct list_head node; /* list of ctxs */
 	struct completion work;
@@ -329,7 +332,6 @@ struct fastrpc_channel_ctx {
 	u32 dsp_attributes[FASTRPC_MAX_DSP_ATTRIBUTES];
 	struct fastrpc_device *secure_fdevice;
 	struct fastrpc_device *fdevice;
-	struct list_head invoke_interrupted_mmaps;
 	bool secure;
 	bool unsigned_support;
 	bool poll_mode_supported;
@@ -349,6 +351,7 @@ struct fastrpc_user {
 	struct list_head user;
 	struct list_head maps;
 	struct list_head pending;
+	struct list_head interrupted;
 	struct list_head mmaps;
 
 	struct fastrpc_channel_ctx *cctx;
@@ -568,16 +571,17 @@ static void fastrpc_context_put(struct fastrpc_invoke_ctx *ctx);
 static void fastrpc_user_free(struct kref *ref)
 {
 	struct fastrpc_user *fl = container_of(ref, struct fastrpc_user, refcount);
-	struct fastrpc_invoke_ctx *ctx, *n;
+	struct fastrpc_channel_ctx *cctx = fl->cctx;
 	struct fastrpc_map *map, *m;
 	struct fastrpc_buf *buf, *b;
+	unsigned long flags;
+
+	/* fl stays on cctx->users until this point, so an SSR before fd close can still find it. */
+	spin_lock_irqsave(&cctx->lock, flags);
+	list_del(&fl->user);
+	spin_unlock_irqrestore(&cctx->lock, flags);
 
 	fastrpc_buf_free(fl->init_mem);
-
-	list_for_each_entry_safe(ctx, n, &fl->pending, node) {
-		list_del(&ctx->node);
-		fastrpc_context_put(ctx);
-	}
 
 	list_for_each_entry_safe(map, m, &fl->maps, node)
 		fastrpc_map_put(map);
@@ -587,7 +591,7 @@ static void fastrpc_user_free(struct kref *ref)
 		fastrpc_buf_free(buf);
 	}
 
-	fastrpc_channel_ctx_put(fl->cctx);
+	fastrpc_channel_ctx_put(cctx);
 	mutex_destroy(&fl->mutex);
 	kfree(fl);
 }
@@ -614,6 +618,12 @@ static void fastrpc_context_free(struct kref *ref)
 	cctx = ctx->cctx;
 	fl = ctx->fl;
 
+	/* list_del_init(), not list_del(): a concurrent drain may still check list_empty(). */
+	spin_lock(&fl->lock);
+	if (!list_empty(&ctx->node))
+		list_del_init(&ctx->node);
+	spin_unlock(&fl->lock);
+
 	for (i = 0; i < ctx->nbufs; i++)
 		fastrpc_map_put(ctx->maps[i]);
 
@@ -625,6 +635,7 @@ static void fastrpc_context_free(struct kref *ref)
 
 	kfree(ctx->maps);
 	kfree(ctx->olaps);
+	kfree(ctx->args);
 	kfree(ctx);
 
 	/* Release the reference taken in fastrpc_context_alloc() */
@@ -648,6 +659,54 @@ static void fastrpc_context_put_wq(struct work_struct *work)
 			container_of(work, struct fastrpc_invoke_ctx, put_work);
 
 	fastrpc_context_put(ctx);
+}
+
+/* Schedules put_work at most once per ctx; racing callers may both try. */
+static void fastrpc_context_schedule_put_work(struct fastrpc_invoke_ctx *ctx)
+{
+	bool do_schedule;
+
+	spin_lock(&ctx->fl->lock);
+	do_schedule = !ctx->put_work_scheduled;
+	ctx->put_work_scheduled = true;
+	spin_unlock(&ctx->fl->lock);
+
+	if (do_schedule)
+		schedule_work(&ctx->put_work);
+}
+
+/* References held by ctx are left intact; only list membership changes. */
+static void fastrpc_context_save_interrupted(struct fastrpc_invoke_ctx *ctx)
+{
+	spin_lock(&ctx->fl->lock);
+	list_move_tail(&ctx->node, &ctx->fl->interrupted);
+	spin_unlock(&ctx->fl->lock);
+}
+
+/* Matches on handle+sc, not sc alone, to avoid resuming an unrelated call. */
+static struct fastrpc_invoke_ctx *fastrpc_context_restore_interrupted(struct fastrpc_user *fl,
+								      u32 handle, u32 sc)
+{
+	struct fastrpc_invoke_ctx *ctx = NULL, *ictx;
+
+	spin_lock(&fl->lock);
+	list_for_each_entry(ictx, &fl->interrupted, node) {
+		if (ictx->pid == current->pid && ictx->handle == handle &&
+		    ictx->sc == sc) {
+			/* May already be mid-teardown; don't resurrect it. */
+			if (kref_get_unless_zero(&ictx->refcount)) {
+				ctx = ictx;
+				list_move_tail(&ctx->node, &fl->pending);
+			}
+			break;
+		}
+	}
+	spin_unlock(&fl->lock);
+
+	if (ctx)
+		fastrpc_context_put(ctx);
+
+	return ctx;
 }
 
 #define CMP(aa, bb) ((aa) == (bb) ? 0 : (aa) < (bb) ? -1 : 1)
@@ -700,7 +759,7 @@ static void fastrpc_get_buff_overlaps(struct fastrpc_invoke_ctx *ctx)
 }
 
 static struct fastrpc_invoke_ctx *fastrpc_context_alloc(
-			struct fastrpc_user *user, u32 kernel, u32 sc,
+			struct fastrpc_user *user, u32 kernel, u32 handle, u32 sc,
 			struct fastrpc_invoke_args *args)
 {
 	struct fastrpc_channel_ctx *cctx = user->cctx;
@@ -730,7 +789,15 @@ static struct fastrpc_invoke_ctx *fastrpc_context_alloc(
 			kfree(ctx);
 			return ERR_PTR(-ENOMEM);
 		}
-		ctx->args = args;
+		/* Own copy: ctx may outlive the caller's args if parked on fl->interrupted. */
+		ctx->args = kzalloc_objs(*ctx->args, ctx->nscalars);
+		if (!ctx->args) {
+			kfree(ctx->olaps);
+			kfree(ctx->maps);
+			kfree(ctx);
+			return ERR_PTR(-ENOMEM);
+		}
+		memcpy(ctx->args, args, ctx->nscalars * sizeof(*args));
 		fastrpc_get_buff_overlaps(ctx);
 	}
 
@@ -740,6 +807,7 @@ static struct fastrpc_invoke_ctx *fastrpc_context_alloc(
 	fastrpc_user_get(user);
 
 	ctx->sc = sc;
+	ctx->handle = handle;
 	ctx->retval = -1;
 	ctx->pid = current->pid;
 	ctx->client_id = user->client_id;
@@ -774,6 +842,7 @@ err_idr:
 	fastrpc_channel_ctx_put(cctx);
 	kfree(ctx->maps);
 	kfree(ctx->olaps);
+	kfree(ctx->args);
 	kfree(ctx);
 
 	return ERR_PTR(ret);
@@ -1364,8 +1433,6 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
 				   struct fastrpc_invoke_args *args)
 {
 	struct fastrpc_invoke_ctx *ctx = NULL;
-	struct fastrpc_buf *buf, *b;
-
 	int err = 0;
 
 	if (!fl->sctx)
@@ -1379,7 +1446,13 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
 		return -EPERM;
 	}
 
-	ctx = fastrpc_context_alloc(fl, kernel, sc, args);
+	/* Resume an interrupted invoke instead of resending to the DSP. */
+	if (!kernel)
+		ctx = fastrpc_context_restore_interrupted(fl, handle, sc);
+	if (ctx)
+		goto wait;
+
+	ctx = fastrpc_context_alloc(fl, kernel, handle, sc, args);
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
 
@@ -1391,8 +1464,15 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
 	dma_wmb();
 	/* Send invoke buffer to remote dsp */
 	err = fastrpc_invoke_send(fl->sctx, ctx, kernel, handle);
-	if (err)
-		goto bail;
+	if (err) {
+		/* Never sent, so not safe to park and resume like bail: does. */
+		spin_lock(&fl->lock);
+		list_del_init(&ctx->node);
+		spin_unlock(&fl->lock);
+		fastrpc_context_put(ctx);
+		dev_dbg(fl->sctx->dev, "Error: Invoke Failed %d\n", err);
+		return err;
+	}
 
 	/*
 	 * Set message context as polled if the call is for a user PD
@@ -1401,7 +1481,16 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
 	if (handle > FASTRPC_MAX_STATIC_HANDLE && fl->pd == USER_PD && fl->poll_mode)
 		ctx->is_polled = true;
 
+wait:
 	err = fastrpc_wait_for_completion(ctx, kernel);
+	if (err == -ETIMEDOUT)
+		dev_warn(fl->sctx->dev,
+			 "fastrpc_invoke: TIMEOUT ctxid=0x%llx handle=0x%x nscalars=%d\n",
+			 ctx->ctxid, handle, ctx->nscalars);
+	else if (err == -ERESTARTSYS)
+		dev_dbg(fl->sctx->dev,
+			"fastrpc_invoke: INTERRUPTED ctxid=0x%llx handle=0x%x nscalars=%d\n",
+			ctx->ctxid, handle, ctx->nscalars);
 	if (err)
 		goto bail;
 
@@ -1418,21 +1507,16 @@ static int fastrpc_internal_invoke(struct fastrpc_user *fl,  u32 kernel,
 		goto bail;
 
 bail:
-	if (err != -ERESTARTSYS && err != -ETIMEDOUT) {
-		/* We are done with this compute context */
+	if (err == -ERESTARTSYS) {
+		fastrpc_context_save_interrupted(ctx);
+	} else if (err == -ETIMEDOUT) {
+		/* Leave linked: a late DSP answer or notify_users() still needs to reach it. */
+		fastrpc_context_put(ctx);
+	} else {
 		spin_lock(&fl->lock);
-		list_del(&ctx->node);
+		list_del_init(&ctx->node);
 		spin_unlock(&fl->lock);
 		fastrpc_context_put(ctx);
-	}
-
-	if (err == -ERESTARTSYS) {
-		spin_lock(&fl->lock);
-		list_for_each_entry_safe(buf, b, &fl->mmaps, node) {
-			list_del(&buf->node);
-			list_add_tail(&buf->node, &fl->cctx->invoke_interrupted_mmaps);
-		}
-		spin_unlock(&fl->lock);
 	}
 
 	if (err)
@@ -1734,13 +1818,28 @@ static int fastrpc_device_release(struct inode *inode, struct file *file)
 {
 	struct fastrpc_user *fl = (struct fastrpc_user *)file->private_data;
 	struct fastrpc_channel_ctx *cctx = fl->cctx;
-	unsigned long flags;
+	struct fastrpc_invoke_ctx *ctx, *n;
+	int release_err;
 
-	fastrpc_release_current_dsp_process(fl);
+	release_err = fastrpc_release_current_dsp_process(fl);
 
-	spin_lock_irqsave(&cctx->lock, flags);
-	list_del(&fl->user);
-	spin_unlock_irqrestore(&cctx->lock, flags);
+	/*
+	 * Drop the invoker ref unconditionally: no retry can arrive once the
+	 * fd is closed. Drop the worker ref only if the DSP confirmed it is
+	 * done with the process; otherwise leave ctx linked so a real answer
+	 * or a later SSR can still release it.
+	 */
+	spin_lock(&fl->lock);
+	list_for_each_entry_safe(ctx, n, &fl->interrupted, node) {
+		ctx->retval = -EPIPE;
+		complete(&ctx->work);
+		spin_unlock(&fl->lock);
+		if (!release_err)
+			fastrpc_context_schedule_put_work(ctx);
+		fastrpc_context_put(ctx);
+		spin_lock(&fl->lock);
+	}
+	spin_unlock(&fl->lock);
 
 	fastrpc_session_free(cctx, fl->sctx);
 	file->private_data = NULL;
@@ -1771,6 +1870,7 @@ static int fastrpc_device_open(struct inode *inode, struct file *filp)
 	spin_lock_init(&fl->lock);
 	mutex_init(&fl->mutex);
 	INIT_LIST_HEAD(&fl->pending);
+	INIT_LIST_HEAD(&fl->interrupted);
 	INIT_LIST_HEAD(&fl->maps);
 	INIT_LIST_HEAD(&fl->mmaps);
 	INIT_LIST_HEAD(&fl->user);
@@ -2700,6 +2800,28 @@ static int fastrpc_init_reserved_mem(struct fastrpc_channel_ctx *cctx,
 				  cctx->vmperms, cctx->vmcount);
 }
 
+static void fastrpc_notify_users(struct fastrpc_user *user)
+{
+	struct fastrpc_invoke_ctx *ctx;
+
+	spin_lock(&user->lock);
+	list_for_each_entry(ctx, &user->pending, node) {
+		ctx->retval = -EPIPE;
+		complete(&ctx->work);
+		fastrpc_context_schedule_put_work(ctx);
+	}
+	/*
+	 * Invoker ref for a parked context is released by fastrpc_user_free()
+	 * or fastrpc_device_release(); this only drops the worker ref.
+	 */
+	list_for_each_entry(ctx, &user->interrupted, node) {
+		ctx->retval = -EPIPE;
+		complete(&ctx->work);
+		fastrpc_context_schedule_put_work(ctx);
+	}
+	spin_unlock(&user->lock);
+}
+
 static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 {
 	struct device *rdev = &rpdev->dev;
@@ -2709,6 +2831,8 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	bool secure_dsp;
 	unsigned int vmids[FASTRPC_MAX_VMIDS];
 	const struct fastrpc_soc_data *soc_data;
+	struct fastrpc_user *user;
+	unsigned long flags;
 
 	soc_data = device_get_match_data(rdev);
 
@@ -2757,6 +2881,18 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	data->poll_mode_supported = soc_data->poll_mode_supported ||
 		of_machine_get_match(fastrpc_poll_supported_machines);
 
+	kref_init(&data->refcount);
+	atomic_set(&data->ctx_seq, 0);
+
+	rdev->dma_mask = &data->dma_mask;
+	dma_set_mask_and_coherent(rdev, DMA_BIT_MASK(32));
+	INIT_LIST_HEAD(&data->users);
+	spin_lock_init(&data->lock);
+	idr_init(&data->ctx_idr);
+	data->domain_id = domain_id;
+	data->rpdev = rpdev;
+	dev_set_drvdata(&rpdev->dev, data);
+
 	switch (domain_id) {
 	case ADSP_DOMAIN_ID:
 	case MDSP_DOMAIN_ID:
@@ -2765,7 +2901,7 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 		data->unsigned_support = false;
 		err = fastrpc_device_register(rdev, data, secure_dsp, domain);
 		if (err)
-			goto err_unmap_heap;
+			goto err_notify;
 		break;
 	case CDSP_DOMAIN_ID:
 	case GDSP_DOMAIN_ID:
@@ -2773,7 +2909,7 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 		/* Create both device nodes so that we can allow both Signed and Unsigned PD */
 		err = fastrpc_device_register(rdev, data, true, domain);
 		if (err)
-			goto err_unmap_heap;
+			goto err_notify;
 
 		err = fastrpc_device_register(rdev, data, false, domain);
 		if (err)
@@ -2781,21 +2917,8 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 		break;
 	default:
 		err = -EINVAL;
-		goto err_unmap_heap;
+		goto err_notify;
 	}
-
-	kref_init(&data->refcount);
-	atomic_set(&data->ctx_seq, 0);
-
-	rdev->dma_mask = &data->dma_mask;
-	dma_set_mask_and_coherent(rdev, DMA_BIT_MASK(32));
-	INIT_LIST_HEAD(&data->users);
-	INIT_LIST_HEAD(&data->invoke_interrupted_mmaps);
-	spin_lock_init(&data->lock);
-	idr_init(&data->ctx_idr);
-	data->domain_id = domain_id;
-	data->rpdev = rpdev;
-	dev_set_drvdata(&rpdev->dev, data);
 
 	err = fastrpc_cb_devices_create(rpdev);
 	if (err)
@@ -2804,7 +2927,6 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	if (data->domain_id == ADSP_DOMAIN_ID && data->sesscount > 0) {
 		struct fastrpc_session_ctx *last_sess;
 		struct fastrpc_session_ctx *dup_sess;
-		unsigned long flags;
 
 		spin_lock_irqsave(&data->lock, flags);
 		last_sess = &data->session[data->sesscount - 1];
@@ -2825,39 +2947,32 @@ err_deregister_fdev:
 	if (data->secure_fdevice)
 		misc_deregister(&data->secure_fdevice->miscdev);
 
-err_unmap_heap:
+err_notify:
+	/*
+	 * A registered device node may already have been opened, so a user
+	 * can hold a cctx reference. Drop only our reference instead of
+	 * freeing the context directly.
+	 */
+	spin_lock_irqsave(&data->lock, flags);
+	data->rpdev = NULL;
+	list_for_each_entry(user, &data->users, user)
+		fastrpc_notify_users(user);
+	spin_unlock_irqrestore(&data->lock, flags);
+
 	fastrpc_remote_heap_release(data, rpdev);
+	fastrpc_channel_ctx_put(data);
+	return err;
 
 err_free_data:
 	kfree(data);
 	return err;
 }
 
-static void fastrpc_notify_users(struct fastrpc_user *user)
-{
-	struct fastrpc_invoke_ctx *ctx;
-
-	spin_lock(&user->lock);
-	list_for_each_entry(ctx, &user->pending, node) {
-		ctx->retval = -EPIPE;
-		complete(&ctx->work);
-	}
-	spin_unlock(&user->lock);
-}
-
 static void fastrpc_rpmsg_remove(struct rpmsg_device *rpdev)
 {
 	struct fastrpc_channel_ctx *cctx = dev_get_drvdata(&rpdev->dev);
-	struct fastrpc_buf *buf, *b;
 	struct fastrpc_user *user;
 	unsigned long flags;
-
-	/* No invocations past this point */
-	spin_lock_irqsave(&cctx->lock, flags);
-	cctx->rpdev = NULL;
-	list_for_each_entry(user, &cctx->users, user)
-		fastrpc_notify_users(user);
-	spin_unlock_irqrestore(&cctx->lock, flags);
 
 	if (cctx->fdevice)
 		misc_deregister(&cctx->fdevice->miscdev);
@@ -2865,8 +2980,12 @@ static void fastrpc_rpmsg_remove(struct rpmsg_device *rpdev)
 	if (cctx->secure_fdevice)
 		misc_deregister(&cctx->secure_fdevice->miscdev);
 
-	list_for_each_entry_safe(buf, b, &cctx->invoke_interrupted_mmaps, node)
-		list_del(&buf->node);
+	/* No invocations past this point */
+	spin_lock_irqsave(&cctx->lock, flags);
+	cctx->rpdev = NULL;
+	list_for_each_entry(user, &cctx->users, user)
+		fastrpc_notify_users(user);
+	spin_unlock_irqrestore(&cctx->lock, flags);
 
 	fastrpc_remote_heap_release(cctx, rpdev);
 
@@ -2931,11 +3050,11 @@ static int fastrpc_rpmsg_callback(struct rpmsg_device *rpdev, void *data,
 	complete(&ctx->work);
 
 	/*
-	 * The DMA buffer associated with the context cannot be freed in
-	 * interrupt context so schedule it through a worker thread to
-	 * avoid a kernel BUG.
+	 * Can't free the DMA buffer in interrupt context; defer to a
+	 * worker. Guarded: notify_users()/device_release() may also be
+	 * racing to schedule this for the same ctx.
 	 */
-	schedule_work(&ctx->put_work);
+	fastrpc_context_schedule_put_work(ctx);
 
 	return 0;
 }

@@ -108,10 +108,11 @@ static unsigned int get_dir_index_using_name(struct super_block *sb,
 
 		/* Sanity check the directory index contents */
 
-		/* size should never be larger than SQUASHFS_NAME_LEN */
-		size = le32_to_cpu(dir_index->size) + 1;
-		if (size > SQUASHFS_NAME_LEN)
+		/* size should never be larger than SQUASHFS_DISK_NAME_LEN */
+		size = le32_to_cpu(dir_index->size);
+		if (size > SQUASHFS_DISK_NAME_LEN)
 			break;
+		++ size;
 
 		/* The stored index should not be larger than max_index */
 		index = le32_to_cpu(dir_index->index);
@@ -236,13 +237,13 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 				goto read_failure;
 
 			length += sizeof(*dire);
-			size = le16_to_cpu(dire->size) + 1;
+			size = le16_to_cpu(dire->size);
 
-			/* size should never be larger than SQUASHFS_NAME_LEN */
-			if (size > SQUASHFS_NAME_LEN)
+			/* size should never be larger than SQUASHFS_DISK_NAME_LEN */
+			if (size > SQUASHFS_DISK_NAME_LEN)
 				goto data_error;
 
-			if (!squashfs_dir_space(dir, length, size))
+			if (!squashfs_dir_space(dir, length, ++ size))
 				goto data_error;
 
 			err = squashfs_read_metadata(dir->i_sb, dire->name,

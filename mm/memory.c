@@ -1770,8 +1770,6 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 		rss[MM_ANONPAGES] -= nr;
 	}
-	/* Checking a single PTE in a batch is sufficient. */
-	arch_check_zapped_pte(vma, ptent);
 	tlb_remove_tlb_entries(tlb, pte, nr, addr);
 	if (unlikely(userfaultfd_pte_wp(vma, ptent)))
 		*any_skipped = zap_install_uffd_wp_if_needed(vma, addr, pte,
@@ -1810,7 +1808,6 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 	if (!page) {
 		/* We don't need up-to-date accessed/dirty bits. */
 		ptep_get_and_clear_full(mm, addr, pte, tlb->fullmm);
-		arch_check_zapped_pte(vma, ptent);
 		tlb_remove_tlb_entry(tlb, pte, addr);
 		if (userfaultfd_pte_wp(vma, ptent))
 			*any_skipped = zap_install_uffd_wp_if_needed(vma, addr,
@@ -5199,6 +5196,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		unsigned long folio_start, folio_end;
 		pte_t *folio_ptep;
 		pte_t folio_pte;
+
+		/* A poisoned page in the folio must take its own fault. */
+		if (folio_test_anon(folio) &&
+		    folio_contain_hwpoisoned_page(folio))
+			goto check_folio;
 
 		folio_pte_range(folio, vma, address, idx, &folio_start,
 				&folio_end);

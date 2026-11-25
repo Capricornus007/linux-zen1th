@@ -124,7 +124,7 @@ static void ZSTD_allocateLiteralsBuffer(ZSTD_DCtx* dctx, void* const dst, const 
     }
 }
 
-/**
+/*
  * Zeros the bytes directly after the decompressed literals so that over-reads
  * only read zeros, rather than potentially uninitialized memory, or bytes from
  * prior decompressions.

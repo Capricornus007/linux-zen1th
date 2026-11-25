@@ -1785,8 +1785,9 @@ static void cfg80211_rehash_bss(struct cfg80211_registered_device *rdev,
 	lockdep_assert_held(&rdev->bss_lock);
 
 	rb_erase(&bss->rbn, &rdev->bss_tree);
+	RB_CLEAR_NODE(&bss->rbn);
 	if (!rb_insert_bss(rdev, bss)) {
-		list_del(&bss->list);
+		list_del_init(&bss->list);
 		if (!list_empty(&bss->hidden_list))
 			list_del_init(&bss->hidden_list);
 		if (!list_empty(&bss->pub.nontrans_list))
@@ -3489,7 +3490,7 @@ static void cfg80211_update_bss_channel(struct wireless_dev *wdev,
 	struct wiphy *wiphy = wdev->wiphy;
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
 	struct cfg80211_internal_bss *new = NULL;
-	struct cfg80211_internal_bss *bss;
+	struct cfg80211_internal_bss *bss, *next;
 	struct cfg80211_bss *nontrans_bss;
 	struct cfg80211_bss *tmp;
 
@@ -3530,6 +3531,15 @@ static void cfg80211_update_bss_channel(struct wireless_dev *wdev,
 			bss = bss_from_pub(nontrans_bss);
 			if (__cfg80211_unlink_bss(rdev, bss))
 				rdev->bss_generation++;
+		}
+
+		if (!new->pub.hidden_beacon_bss) {
+			list_for_each_entry_safe(bss, next, &new->hidden_list,
+						 hidden_list) {
+				RCU_INIT_POINTER(bss->pub.beacon_ies, NULL);
+				if (__cfg80211_unlink_bss(rdev, bss))
+					rdev->bss_generation++;
+			}
 		}
 
 		WARN_ON(atomic_read(&new->hold));

@@ -553,13 +553,21 @@ static int twd_wdt_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(clk), "failed to get clock\n");
 
 	if (clk) {
+		/* Keep the rate snapshot stable until its notifier is installed. */
+		ret = clk_rate_exclusive_get(clk);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to protect clock rate\n");
+
 		wdt->rate = clk_get_rate(clk);
-		if (!wdt->rate)
+		if (!wdt->rate) {
+			clk_rate_exclusive_put(clk);
 			return dev_err_probe(dev, -EINVAL, "clock rate is zero\n");
+		}
 
 		wdt->max_rate = wdt->rate;
 		wdt->clk_nb.notifier_call = twd_wdt_clk_notify;
 		ret = devm_clk_notifier_register(dev, clk, &wdt->clk_nb);
+		clk_rate_exclusive_put(clk);
 		if (ret)
 			return dev_err_probe(dev, ret, "failed to register clock notifier\n");
 	} else {

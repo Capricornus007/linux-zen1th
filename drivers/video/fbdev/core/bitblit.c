@@ -182,8 +182,8 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 
 #ifdef CONFIG_FONT_CJK
 		bool continuation;
-		u32 cy = (image->dy / vc->vc_font.height + par->p->vrows -
-			  par->p->yscroll) % par->p->vrows;
+		u32 cy = (image->dy / vc->vc_font.height + info->fbcon_par->p->vrows -
+			  info->fbcon_par->p->yscroll) % info->fbcon_par->p->vrows;
 		u32 cx = image->dx / vc->vc_font.width + (cnt);
 		u32 c_utf = vc_uniscr_get_cjk(vc, cy, cx, &continuation);
 		u32 cellsize = font_glyph_size(s_width, s_vpitch);
@@ -236,8 +236,8 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 
 #ifdef CONFIG_FONT_CJK
 		bool continuation;
-		u32 cy = (image->dy / vc->vc_font.height + par->p->vrows -
-			  par->p->yscroll) % par->p->vrows;
+		u32 cy = (image->dy / vc->vc_font.height + info->fbcon_par->p->vrows -
+			  info->fbcon_par->p->yscroll) % info->fbcon_par->p->vrows;
 		u32 cx = image->dx / vc->vc_font.width + (cnt);
 		u32 c_utf = vc_uniscr_get_cjk(vc, cy, cx, &continuation);
 		u32 cellsize = font_glyph_size(s_width, s_vpitch);

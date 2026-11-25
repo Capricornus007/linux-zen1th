@@ -2619,7 +2619,6 @@ bool zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	 */
 	orig_pmd = pmdp_huge_get_and_clear_full(vma, addr, pmd,
 						tlb->fullmm);
-	arch_check_zapped_pmd(vma, orig_pmd);
 	tlb_remove_pmd_tlb_entry(tlb, pmd, addr);
 
 	is_present = pmd_present(orig_pmd);
@@ -3104,7 +3103,6 @@ int zap_huge_pud(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		return 0;
 
 	orig_pud = pudp_huge_get_and_clear_full(vma, addr, pud, tlb->fullmm);
-	arch_check_zapped_pud(vma, orig_pud);
 	tlb_remove_pud_tlb_entry(tlb, pud, addr);
 	if (!vma_is_mm_managed(vma)) {
 		spin_unlock(ptl);
@@ -4448,9 +4446,9 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_large(folio), folio);
 
 	/*
-	 * We might not hold a reference on a locked folio's inode, but we might
-	 * allocate memory under the folio lock. Direct reclaim could try
-	 * evicting the inode, or wait for writeback on cgroup v1, to then
+	 * We might allocate memory while holding the folio lock. Direct
+	 * reclaim or compaction could try evicting the inode, isolating and
+	 * locking our folio, or wait for writeback on cgroup v1, to then
 	 * deadlock on folio locks.
 	 */
 	nofs_flags = memalloc_nofs_save();

@@ -7567,6 +7567,21 @@ static void scx_root_disable(struct scx_sched *sch)
 
 	was_switched_all = scx_switched_all();
 
+	/*
+	 * Tasks fall back to fair from here on. Attach fair_server now, or an
+	 * RT task can starve them while we wait for RCU grace periods below.
+	 * If its bandwidth doesn't fit, the swap at the end attaches it.
+	 */
+	if (was_switched_all) {
+		for_each_possible_cpu(cpu) {
+			struct rq *rq = cpu_rq(cpu);
+
+			guard(rq_lock_irqsave)(rq);
+			update_rq_clock(rq);
+			dl_server_attach_bw(&rq->fair_server);
+		}
+	}
+
 	static_branch_disable(&__scx_switched_all);
 	WRITE_ONCE(scx_switching_all, false);
 	WRITE_ONCE(scx_task_switch_enabled, false);
@@ -7617,8 +7632,8 @@ static void scx_root_disable(struct scx_sched *sch)
 
 	/*
 	 * Re-balance the dl_server bandwidth reservations: detach ext_server
-	 * (no more sched_ext tasks) and reinstate fair_server if it was
-	 * previously detached because we were running in full mode.
+	 * (no more sched_ext tasks) and attach fair_server if the attach
+	 * above failed.
 	 *
 	 * Unlike the enable path, this runs on a recovery path that cannot
 	 * fail, so we use dl_server_swap_bw() to atomically free ext_server's
@@ -9225,10 +9240,14 @@ static int bpf_scx_init_member(const struct btf_type *t,
 			return -E2BIG;
 		ops->timeout_ms = *(u32 *)(udata + moff);
 		return 1;
-	case offsetof(struct sched_ext_ops, exit_dump_len):
-		ops->exit_dump_len =
-			*(u32 *)(udata + moff) ?: SCX_EXIT_DUMP_DFL_LEN;
+	case offsetof(struct sched_ext_ops, exit_dump_len): {
+		u32 dump_len = *(u32 *)(udata + moff);
+
+		if (dump_len > INT_MAX)
+			return -E2BIG;
+		ops->exit_dump_len = dump_len ?: SCX_EXIT_DUMP_DFL_LEN;
 		return 1;
+	}
 	case offsetof(struct sched_ext_ops, hotplug_seq):
 		ops->hotplug_seq = *(u64 *)(udata + moff);
 		return 1;
@@ -9299,15 +9318,17 @@ static int bpf_scx_check_member(const struct btf_type *t,
 	 * sub-scheds and sub-scheds themselves but I don't know how to access
 	 * struct_ops from here.
 	 */
-	switch (moff) {
-	case offsetof(struct sched_ext_ops, dispatch):
-		prog->aux->priv_stack_requested = true;
-		prog->aux->recursion_detected = scx_pstack_recursion_on_dispatch;
-		break;
-	case offsetof(struct sched_ext_ops, sub_caps_updated):
-		prog->aux->priv_stack_requested = true;
-		prog->aux->recursion_detected = scx_pstack_recursion_on_caps_updated;
-		break;
+	if (bpf_jit_supports_private_stack()) {
+		switch (moff) {
+		case offsetof(struct sched_ext_ops, dispatch):
+			prog->aux->priv_stack_requested = true;
+			prog->aux->recursion_detected = scx_pstack_recursion_on_dispatch;
+			break;
+		case offsetof(struct sched_ext_ops, sub_caps_updated):
+			prog->aux->priv_stack_requested = true;
+			prog->aux->recursion_detected = scx_pstack_recursion_on_caps_updated;
+			break;
+		}
 	}
 #endif	/* CONFIG_EXT_SUB_SCHED */
 
@@ -11158,7 +11179,7 @@ __bpf_kfunc struct task_struct *scx_bpf_dsq_peek(u64 dsq_id,
 		return NULL;
 	}
 
-	return rcu_dereference(dsq->first_task);
+	return rcu_dereference_all(dsq->first_task);
 }
 
 /**
@@ -11899,8 +11920,6 @@ __bpf_kfunc struct task_struct *scx_bpf_cpu_curr(s32 cpu, const struct bpf_prog_
 {
 	struct scx_sched *sch;
 
-	guard(rcu)();
-
 	sch = scx_prog_sched(aux);
 	if (unlikely(!sch))
 		return NULL;
@@ -11908,7 +11927,7 @@ __bpf_kfunc struct task_struct *scx_bpf_cpu_curr(s32 cpu, const struct bpf_prog_
 	if (!scx_cpu_valid(sch, cpu, NULL))
 		return NULL;
 
-	return rcu_dereference(cpu_rq(cpu)->donor);
+	return rcu_dereference_all(cpu_rq(cpu)->donor);
 }
 
 /**
@@ -11924,15 +11943,13 @@ __bpf_kfunc struct task_struct *scx_bpf_cid_curr(s32 cid, const struct bpf_prog_
 	struct scx_sched *sch;
 	s32 cpu;
 
-	guard(rcu)();
-
 	sch = scx_prog_sched(aux);
 	if (unlikely(!sch))
 		return NULL;
 	cpu = scx_cid_to_cpu(sch, cid);
 	if (cpu < 0)
 		return NULL;
-	return rcu_dereference(cpu_rq(cpu)->donor);
+	return rcu_dereference_all(cpu_rq(cpu)->donor);
 }
 
 /**
@@ -11949,7 +11966,7 @@ __bpf_kfunc struct task_struct *scx_bpf_tid_to_task(u64 tid)
 	struct sched_ext_entity *scx;
 
 	if (!scx_tid_to_task_enabled()) {
-		struct scx_sched *sch = rcu_dereference(scx_root);
+		struct scx_sched *sch = rcu_dereference_all(scx_root);
 
 		if (sch)
 			scx_error(sch, "scx_bpf_tid_to_task() called without SCX_OPS_TID_TO_TASK");
@@ -12284,7 +12301,6 @@ static const u32 scx_kf_allow_flags[] = {
 	[SCX_OP_IDX(dispatch)]		= SCX_KF_ALLOW_ENQUEUE | SCX_KF_ALLOW_DISPATCH,
 	[SCX_OP_IDX(cpu_release)]	= SCX_KF_ALLOW_CPU_RELEASE,
 	[SCX_OP_IDX(init_task)]		= SCX_KF_ALLOW_UNLOCKED,
-	[SCX_OP_IDX(dump)]		= SCX_KF_ALLOW_UNLOCKED,
 #ifdef CONFIG_EXT_GROUP_SCHED
 	[SCX_OP_IDX(cgroup_init)]	= SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(cgroup_exit)]	= SCX_KF_ALLOW_UNLOCKED,
@@ -12300,7 +12316,12 @@ static const u32 scx_kf_allow_flags[] = {
 	[SCX_OP_IDX(sub_child_ecaps_updated)] = SCX_KF_ALLOW_ENQUEUE | SCX_KF_ALLOW_DISPATCH,
 	[SCX_OP_IDX(cpu_online)]	= SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(cpu_offline)]	= SCX_KF_ALLOW_UNLOCKED,
-	[SCX_OP_IDX(init_cids)]		= SCX_KF_ALLOW_UNLOCKED | SCX_KF_ALLOW_INIT_CIDS,
+	/*
+	 * ops.init_cids() runs before the cid tables are published and before
+	 * the arena pool and pshards are allocated. Limit it to finalizing the
+	 * cid layout; everything else belongs in ops.init().
+	 */
+	[SCX_OP_IDX(init_cids)]		= SCX_KF_ALLOW_INIT_CIDS,
 	[SCX_OP_IDX(init)]		= SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(exit)]		= SCX_KF_ALLOW_UNLOCKED,
 };

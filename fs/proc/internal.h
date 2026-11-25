@@ -8,6 +8,7 @@
 #include <linux/proc_fs.h>
 #include <linux/proc_ns.h>
 #include <linux/refcount.h>
+#include <linux/seqlock.h>
 #include <linux/spinlock.h>
 #include <linux/lockdep.h>
 #include <linux/atomic.h>
@@ -185,6 +186,7 @@ union proc_op {
 struct proc_inode {
 	struct pid *pid;
 	unsigned int fd;
+	seqcount_spinlock_t owner_seq;	/* see proc_task_owner_valid() */
 	union proc_op op;
 	struct proc_dir_entry *pde;
 	struct ctl_table_header *sysctl;
@@ -200,6 +202,31 @@ struct proc_inode {
 static inline struct proc_inode *PROC_I(const struct inode *inode)
 {
 	return container_of(inode, struct proc_inode, vfs_inode);
+}
+
+/**
+ * proc_task_owner_lock - start updating the owner and mode of a task inode
+ * @inode: a proc inode which takes its owner from a task
+ *
+ * The task's credentials must be read after this, so that updates are
+ * applied in the order in which they looked at the task.
+ */
+static inline void proc_task_owner_lock(struct inode *inode)
+	__acquires(&inode->i_lock)
+{
+	spin_lock(&inode->i_lock);
+	write_seqcount_begin(&PROC_I(inode)->owner_seq);
+}
+
+/**
+ * proc_task_owner_unlock - finish updating the owner and mode of a task inode
+ * @inode: the inode which was passed to proc_task_owner_lock()
+ */
+static inline void proc_task_owner_unlock(struct inode *inode)
+	__releases(&inode->i_lock)
+{
+	write_seqcount_end(&PROC_I(inode)->owner_seq);
+	spin_unlock(&inode->i_lock);
 }
 
 static inline struct proc_dir_entry *PDE(const struct inode *inode)
@@ -330,6 +357,8 @@ int proc_nochmod_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 extern void proc_pid_evict_inode(struct proc_inode *);
 extern struct inode *proc_pid_make_inode(struct super_block *, struct task_struct *, umode_t);
 extern void pid_update_inode(struct task_struct *, struct inode *);
+bool proc_task_owner_valid(struct task_struct *task, struct inode *inode,
+			   umode_t dump_mode, umode_t mode);
 int proc_exec_id_single_open(struct inode *inode, struct file *file,
 			     int (*show)(struct seq_file *, void *));
 int proc_exec_id_single_release(struct inode *inode, struct file *file);

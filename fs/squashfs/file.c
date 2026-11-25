@@ -492,8 +492,7 @@ static int squashfs_read_folio(struct file *file, struct folio *folio)
 					PAGE_SHIFT))
 		goto out;
 
-	if (index < file_end || squashfs_i(inode)->fragment_block ==
-					SQUASHFS_INVALID_BLK) {
+	if (index < file_end || !squashfs_i(inode)->has_fragment) {
 		u64 block = 0;
 
 		res = read_blocklist(inode, index, &block);
@@ -633,7 +632,7 @@ static void squashfs_readahead(struct readahead_control *ractl)
 			goto skip_pages;
 
 		if (start >> msblk->block_log == file_end &&
-				squashfs_i(inode)->fragment_block != SQUASHFS_INVALID_BLK) {
+				squashfs_i(inode)->has_fragment) {
 			res = squashfs_readahead_fragment(inode, pages,
 					nr_pages, expected, start);
 			if (res)
@@ -707,8 +706,7 @@ static loff_t seek_hole_data(struct file *file, loff_t offset, int whence)
 		return -ENXIO;
 
 	/* is offset within tailend and is tailend packed into a fragment? */
-	if (index + 1 == file_end &&
-			squashfs_i(inode)->fragment_block != SQUASHFS_INVALID_BLK) {
+	if (index + 1 == file_end && squashfs_i(inode)->has_fragment) {
 		if (whence == SEEK_DATA)
 			return offset;
 

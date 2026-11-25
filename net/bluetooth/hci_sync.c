@@ -2320,8 +2320,13 @@ int hci_le_terminate_big_sync(struct hci_dev *hdev, u8 handle, u8 reason)
 	cp.handle = handle;
 	cp.reason = reason;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_TERM_BIG,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for HCI_LE_Terminate_BIG_Complete, so the periodic advertising
+	 * of the BIG is not disabled while the BIG is still being terminated.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_TERM_BIG,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_TERM_BIG_COMPLETE,
+					HCI_CMD_TIMEOUT, NULL);
 }
 
 int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
@@ -8993,8 +8998,15 @@ static int hci_le_create_big_v2_sync(struct hci_conn *conn,
 		cp.bis.hdt_rates = cpu_to_le16(qos->bcast.out.rates ? :
 					       hci_hdt_tx_rates(hdev));
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG_V2,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2,
+	 * which hci_le_set_event_mask_sync() unmasks for it.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG_V2,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+					conn->conn_timeout, NULL);
 }
 
 int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
@@ -9020,8 +9032,16 @@ int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
 	cp.bis.encryption = qos->bcast.encryption;
 	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2
+	 * even here, since that is the one unmasked.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG,
+					sizeof(cp), &cp, hdt_capable(hdev) ?
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2 :
+					HCI_EVT_LE_CREATE_BIG_COMPLETE,
+					conn->conn_timeout, NULL);
 }
 
 static void le_enable_encrypt_complete(struct hci_dev *hdev, void *data, int err)
@@ -9285,4 +9305,62 @@ int hci_le_eks_oppt_encrypt(struct hci_conn *conn)
 		kfree(cp);
 
 	return err;
+}
+
+static void le_set_data_len_complete(struct hci_dev *hdev, void *data, int err)
+{
+	struct hci_conn *conn = data;
+
+	bt_dev_dbg(hdev, "err %d", err);
+	if (err && err != -ECANCELED && err != -ENODEV)
+		bt_dev_warn(hdev, "Failed to set LE data length (%d)", err);
+	hci_conn_put(conn);
+}
+
+static int hci_le_set_data_len_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_conn *conn = data;
+	struct hci_cp_le_set_data_len cp;
+
+	hci_dev_lock(hdev);
+
+	if (!hci_conn_valid(hdev, conn) || conn->type != LE_LINK ||
+	    conn->role != HCI_ROLE_MASTER ||
+	    (conn->state != BT_CONNECTED && conn->state != BT_CONFIG)) {
+		hci_dev_unlock(hdev);
+		return -ECANCELED;
+	}
+
+	/* Use the current suggested defaults, including later host changes. */
+	if (!hci_test_quirk(hdev, HCI_QUIRK_NEEDS_LE_SET_DATA_LEN) ||
+	    !(hdev->commands[33] & BIT(6)) ||
+	    !(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT) ||
+	    !(conn->le_features[0] & HCI_LE_DATA_LEN_EXT) ||
+	    hdev->le_def_tx_len <= 27) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	cp.handle = cpu_to_le16(conn->handle);
+	cp.tx_len = cpu_to_le16(hdev->le_def_tx_len);
+	cp.tx_time = cpu_to_le16(hdev->le_def_tx_time);
+
+	hci_dev_unlock(hdev);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_DATA_LEN,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+int hci_le_set_data_len(struct hci_conn *conn)
+{
+	struct hci_dev *hdev = conn->hdev;
+	int err;
+
+	err = hci_cmd_sync_queue_once(hdev, hci_le_set_data_len_sync,
+				      hci_conn_get(conn),
+				      le_set_data_len_complete);
+	if (err)
+		hci_conn_put(conn);
+
+	return (err == -EEXIST) ? 0 : err;
 }

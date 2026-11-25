@@ -1892,10 +1892,9 @@ static int migrate_pages_batch(struct list_head *from,
 
 		/*
 		 * Prepare the source folios, and allocate the destination
-		 * folios before locking any source folio. We lock source folios
-		 * without holding an inode reference, and direct reclaim could
-		 * try evicting the inode to then deadlock on folio locks.
-		 * Further, this reduces folio locking times.
+		 * folios before locking any source folio. We must be careful
+		 * when allocating memory while holding folio locks, so just
+		 * avoid it.
 		 */
 		list_for_each_entry_safe(folio, tmp, from, lru) {
 			is_large = folio_test_large(folio);
