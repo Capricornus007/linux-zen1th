@@ -164,14 +164,19 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           # softprops 更新 release 不会删旧 asset；列举后删掉非本轮文件名。
+          # 2026-11-25 教訓：gh api 的 2>/dev/null 把失敗吞成空列表→清理靜默跳過，
+          # 舊版本包殘留（g7b7de0e45 殘留實錘）。失敗必須紅。
           cd /home/builder/src
           KEEP=$(basename $(ls linux-zen1th-[0-9]*.pkg.tar.zst | head -1))
           HOLD=$(basename $(ls linux-zen1th-headers-[0-9]*.pkg.tar.zst | head -1))
-          for a in $(gh api repos/${GITHUB_REPOSITORY}/releases/tags/zen1th-repo \
-                       --jq '.assets[].name' 2>/dev/null); do
+          ASSETS=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/zen1th-repo \
+                       --jq '.assets[].name') || { echo "::error::列舉 zen1th-repo assets 失敗"; exit 1; }
+          for a in $ASSETS; do
             case "$a" in
               "$KEEP"|"$HOLD"|zen1th.db*|zen1th.files*|SHA256SUMS-kernel) ;;
-              *) gh release delete-asset zen1th-repo "$a" --repo "${GITHUB_REPOSITORY}" -y >/dev/null 2>&1 && echo "删旧 $a" ;;
+              *) gh release delete-asset zen1th-repo "$a" --repo "${GITHUB_REPOSITORY}" -y \
+                   || { echo "::error::刪舊 asset 失敗：$a"; exit 1; }
+                 echo "删旧 $a" ;;
             esac
           done
         env:
