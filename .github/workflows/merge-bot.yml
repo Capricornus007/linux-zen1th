@@ -284,11 +284,20 @@ jobs:
             || { echo "::error::cjktty 16x16 字型數據 .h 未寫入"; exit 1; }
           echo "cjktty font .h: 16x16=$(wc -c < lib/fonts/font_cjk_16x16.h) 32x32=$(wc -c < lib/fonts/font_cjk_32x32.h) bytes"
           # 功能完整性閘門：CJK tty 邏輯＋字型資料都必須真的進原始碼。
+          # 2026-11-25 教訓（run 45606483734 實錘）：v2/v3 補丁的稀疏檢出污染讓
+          # selection.h/Kconfig/Makefile/font.h 變成「整檔刪除」段，門閘當時只查
+          # fonts.c 等符號檔沒查這四個 → merge-bot 綠、build config 自檢紅。
+          # 現在補上：Kconfig 必須含 FONT_CJK 選項、Makefile 必須含 cjk .o、
+          # 且四檔一律非空（0 字節＝自我毀滅段特徵）。
           grep -q 'fontdata_utf' drivers/video/fbdev/core/fbcon.h \
             && grep -q 'font_bits' drivers/video/fbdev/core/fbcon_ccw.c \
             && grep -q 'cjk_16x16' lib/fonts/fonts.c \
             && grep -q 'cjk_32x32' lib/fonts/fonts.c \
-            || { echo "::error::cjktty 套用後缺關鍵符號/字型，拒絕出包"; exit 1; }
+            && grep -q 'FONT_CJK_16x16' lib/fonts/Kconfig \
+            && grep -q 'font_cjk_16x16' lib/fonts/Makefile \
+            && [ -s lib/fonts/Kconfig ] && [ -s lib/fonts/Makefile ] \
+            && [ -s lib/fonts/font.h ] && [ -s include/linux/selection.h ] \
+            || { echo "::error::cjktty 套用後缺關鍵符號/字型/Kconfig/Makefile（或檔案被清空），拒絕出包"; exit 1; }
           git add -A; git commit -qm "cjktty v7.x (原創 next 適配：font_data_t 引用計數對齊，9 .o 編譯通過)"
 
           mkdir -p config ci
