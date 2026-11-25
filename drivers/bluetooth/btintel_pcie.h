@@ -174,8 +174,6 @@ enum {
 	BTINTEL_PCIE_HW_RFKILL_STATE_CHECK,
 	BTINTEL_PCIE_SETUP_DONE,
 	BTINTEL_PCIE_MAIL_BOX_INTR,
-	BTINTEL_PCIE_MBOX_PARSE_PENDING,
-	BTINTEL_PCIE_MBOX_PARSE_READY,
 	BTINTEL_PCIE_FATAL_ERR_POST_SETUP_PENDING,
 };
 
@@ -237,7 +235,6 @@ enum btintel_pcie_mbox_msg {
 
 /* Default interrupt timeout in msec */
 #define BTINTEL_DEFAULT_INTR_TIMEOUT_MS	3000
-#define BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS	500
 
 #define BTINTEL_PCIE_DX_TRANSITION_MAX_RETRIES	3
 
@@ -772,6 +769,14 @@ struct btintel_pcie_data {
 	spinlock_t	hci_rx_lock;
 	/* lock to serialize IPC control register updates */
 	spinlock_t	ipc_lock;
+	/* lock to serialize HBUS_TARG_WRPTR writes against the PRPH_DEV_ADDR/
+	 * PRPH_DEV_RD target access register pair. Never sleep while held.
+	 */
+	spinlock_t	dev_mem_lock;
+	/* lock to serialize the MAC_ACCESS_REQ get/release sequence together
+	 * with the target accesses done under it. Held across sleeping calls.
+	 */
+	struct mutex	mac_access_lock;
 
 	void __iomem	*base_addr;
 
@@ -842,10 +847,6 @@ struct btintel_pcie_data {
 	struct btintel_pcie_mbox	mbox;
 	atomic64_t	last_dump_jiffies64;
 
-	/* Wait queue for mbox_worker to wait for GP0 alive interrupt */
-	wait_queue_head_t	mbox_parse_wait_q;
-	/* Timestamp captured in GP1 handler when mbox interrupt is received */
-	ktime_t	mbox_intr_ts;
 	bool		pcie_alloc_init;
 };
 
@@ -887,9 +888,36 @@ static inline void btintel_pcie_clr_reg_bits(struct btintel_pcie_data *data,
 	iowrite32(r, data->base_addr + offset);
 }
 
+/* Caller must hold MAC access. The address/data register pair is accessed
+ * under dev_mem_lock so that it neither overlaps a HBUS_TARG_WRPTR write nor
+ * interleaves with another reader.
+ */
 static inline u32 btintel_pcie_rd_dev_mem(struct btintel_pcie_data *data,
 					  u32 addr)
 {
+	u32 val;
+
+	spin_lock(&data->dev_mem_lock);
 	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_ADDR_REG, addr);
-	return btintel_pcie_rd_reg32(data, BTINTEL_PCIE_PRPH_DEV_RD_REG);
+	val = btintel_pcie_rd_reg32(data, BTINTEL_PCIE_PRPH_DEV_RD_REG);
+	spin_unlock(&data->dev_mem_lock);
+
+	return val;
+}
+
+static inline void btintel_pcie_wr_dev_mem(struct btintel_pcie_data *data,
+					  u32 addr, u32 val)
+{
+	spin_lock(&data->dev_mem_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_ADDR_REG, addr);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_WR_REG, val);
+	spin_unlock(&data->dev_mem_lock);
+}
+
+static inline void btintel_pcie_wr_wrptr(struct btintel_pcie_data *data,
+					 u32 val)
+{
+	spin_lock(&data->dev_mem_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	spin_unlock(&data->dev_mem_lock);
 }

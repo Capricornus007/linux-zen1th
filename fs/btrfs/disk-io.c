@@ -1297,6 +1297,8 @@ void btrfs_free_fs_info(struct btrfs_fs_info *fs_info)
  * @objectid:	root id
  * @anon_dev:	preallocated anonymous block device number for new roots,
  *		pass NULL for a new allocation.
+ *		If the ID is consumed, *@anon_dev is set to 0.
+ *		Otherwise the caller needs to release the ID.
  * @check_ref:	whether to check root item references, If true, return -ENOENT
  *		for orphan roots
  */
@@ -1385,11 +1387,20 @@ again:
 	ret = btrfs_insert_fs_root(fs_info, root);
 	if (ret) {
 		if (ret == -EEXIST) {
+			/*
+			 * The preallocated anon_dev is still owned by the
+			 * caller, don't let btrfs_put_root() free it.
+			 */
+			if (anon_dev && *anon_dev)
+				root->anon_dev = 0;
 			btrfs_put_root(root);
 			goto again;
 		}
 		goto fail;
 	}
+	/* The new root owns the preallocated anon_dev now. */
+	if (anon_dev)
+		*anon_dev = 0;
 	return root;
 fail:
 	/*
@@ -1424,6 +1435,8 @@ struct btrfs_root *btrfs_get_fs_root(struct btrfs_fs_info *fs_info,
  * @objectid:	tree objectid
  * @anon_dev:	if NULL, allocate a new anonymous block device or use the
  *		parameter value if not NULL
+ *		Check the comment of btrfs_get_root_ref() on the lifespan
+ *		of @anon_dev if not NULL.
  */
 struct btrfs_root *btrfs_get_new_fs_root(struct btrfs_fs_info *fs_info,
 					 u64 objectid, dev_t *anon_dev)
@@ -3353,6 +3366,7 @@ static void invalidate_and_check_btree_folios(struct btrfs_fs_info *fs_info)
 {
 	unsigned long index = 0;
 	struct extent_buffer *eb;
+	bool found_err = false;
 	int ret;
 
 	ret = invalidate_inode_pages2(fs_info->btree_inode->i_mapping);
@@ -3391,17 +3405,18 @@ static void invalidate_and_check_btree_folios(struct btrfs_fs_info *fs_info)
 		 * of the loop, one for the ownership in the buffer tree.
 		 */
 		if (unlikely(refs > 2 || extent_buffer_under_io(eb))) {
-			WARN_ON_ONCE(IS_ENABLED(CONFIG_BTRFS_DEBUG));
 			btrfs_warn(fs_info,
 			"unable to release extent buffer %llu owner %llu gen %llu refs %u flags 0x%lx",
 				   eb->start, btrfs_header_owner(eb),
 				   btrfs_header_generation(eb),
 				   refs, eb->bflags);
+			found_err = true;
 		}
 		free_extent_buffer(eb);
 		rcu_read_lock();
 	}
 	rcu_read_unlock();
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_BTRFS_DEBUG) && found_err);
 	invalidate_inode_pages2(fs_info->btree_inode->i_mapping);
 }
 
@@ -4966,6 +4981,20 @@ void btrfs_cleanup_one_transaction(struct btrfs_transaction *cur_trans)
 		btrfs_extent_io_tree_release(&root->dirty_log_pages);
 		btrfs_qgroup_clean_swapped_blocks(root);
 	}
+
+	spin_lock(&cur_trans->dropped_roots_lock);
+	while (!list_empty(&cur_trans->dropped_roots)) {
+		struct btrfs_root *root;
+
+		root = list_first_entry(&cur_trans->dropped_roots,
+					struct btrfs_root, root_list);
+		list_del_init(&root->root_list);
+		spin_unlock(&cur_trans->dropped_roots_lock);
+		btrfs_free_log(NULL, root);
+		btrfs_drop_and_free_fs_root(fs_info, root);
+		spin_lock(&cur_trans->dropped_roots_lock);
+	}
+	spin_unlock(&cur_trans->dropped_roots_lock);
 
 	btrfs_destroy_delayed_refs(cur_trans);
 

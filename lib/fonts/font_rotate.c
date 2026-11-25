@@ -188,13 +188,10 @@ EXPORT_SYMBOL_GPL(font_glyph_rotate_270);
  * Rotation happens in steps of 90°. The @steps parameter can have any value,
  * but only 0 to 3 produce distinct results. With 4 or higher, a full rotation
  * has been performed. You can pass any value for @steps and the helper will
- * perform the appropriate rotation. Note that the returned buffer is not
- * compatible with font_data_t. It only contains glyph data in the same format
- * as returned by font_data_buf(). Callers are responsible to free the returned
- * buffer with kfree(). Font rotation typically happens when displays get
- * re-oriented. To avoid unnecessary re-allocation of the memory buffer, the
- * caller can pass in an earlier result in @buf for reuse. The returned font
- * data should be released with font_data_put().
+ * perform the appropriate rotation. Font rotation typically happens when
+ * displays get re-oriented. To avoid unnecessary re-allocation of the memory
+ * buffer, the caller can pass in an earlier result in @buf for reuse. The
+ * returned font data should be released with font_data_put().
  *
  * Returns:
  * Font data with rotated glyphs on success, or an error pointer otherwise

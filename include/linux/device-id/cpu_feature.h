@@ -2,6 +2,11 @@
 #ifndef LINUX_DEVICE_ID_CPU_FEATURE_H
 #define LINUX_DEVICE_ID_CPU_FEATURE_H
 
+/*
+ * This file is included by scripts/mod/file2alias.c which is compiled
+ * using the host compiler which might not have <linux/types.h> but the
+ * __u{8,16,32} types are defined there locally.
+ */
 #ifdef __KERNEL__
 #include <linux/types.h>
 #endif

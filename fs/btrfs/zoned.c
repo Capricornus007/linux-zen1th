@@ -2465,12 +2465,13 @@ bool btrfs_zone_activate(struct btrfs_block_group *block_group)
 		if (zinfo->max_active_zones == 0)
 			continue;
 
-		if (is_data)
-			reserved = zinfo->reserved_active_zones;
 		/*
-		 * For the data block group, leave active zones for one
-		 * metadata block group and one system block group.
+		 * For the data block group, leave the active zones reserved
+		 * for metadata, tree-log and system block groups. A negative
+		 * reservation holds nothing back, see btrfs_can_activate_zone().
 		 */
+		if (is_data)
+			reserved = max(zinfo->reserved_active_zones, 0);
 		if (atomic_read(&zinfo->active_zones_left) <= reserved) {
 			ret = false;
 			goto out_unlock;
@@ -2680,6 +2681,43 @@ int btrfs_zone_finish(struct btrfs_block_group *block_group)
 	return do_zone_finish(block_group, false);
 }
 
+/*
+ * Finish the zones of a block group emptied by relocation, before removing it.
+ *
+ * btrfs_relocate_block_group() tries this before relocating, but gets -EAGAIN
+ * while tree blocks allocated in the block group are not written yet, and for
+ * the data relocation block group. If the block group is then removed with its
+ * zones still active, it stays on fs_info->zone_active_bgs and, for metadata
+ * and system, its share of reserved_active_zones is never given back. After a
+ * few balances the reservation is negative and data writeback fails with
+ * -ENOSPC.
+ *
+ * Here nothing is left to write: the block group is read-only and empty,
+ * relocation waited for its reservations and ordered extents, and
+ * relocate_block_group() committed the transaction. So only wait for extent
+ * buffer writeback and finish it as fully written. do_zone_finish(bg, false)
+ * would take it read-only again, which for a system block group can allocate
+ * a system chunk under ro_block_group_mutex and finish another block group to
+ * activate it, taking the mutex again.
+ */
+void btrfs_zone_finish_relocated(struct btrfs_block_group *block_group)
+{
+	struct btrfs_fs_info *fs_info = block_group->fs_info;
+	int ret;
+
+	if (!btrfs_is_zoned(fs_info))
+		return;
+
+	if (block_group->flags & (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM))
+		wait_eb_writebacks(block_group);
+
+	ret = do_zone_finish(block_group, true);
+	if (ret)
+		btrfs_warn(fs_info,
+			   "failed to finish zones of relocated block group %llu: %d",
+			   block_group->start, ret);
+}
+
 bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
 {
 	struct btrfs_fs_info *fs_info = fs_devices->fs_info;
@@ -2707,8 +2745,14 @@ bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
 			break;
 		}
 
+		/*
+		 * A negative reservation holds nothing back. Do not count it
+		 * as free zones: the check below would pass with no active
+		 * zone left, and the caller would allocate a chunk it cannot
+		 * activate instead of finishing a zone, then fail with -ENOSPC.
+		 */
 		if (flags & BTRFS_BLOCK_GROUP_DATA)
-			reserved = zinfo->reserved_active_zones;
+			reserved = max(zinfo->reserved_active_zones, 0);
 
 		switch (flags & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
 		case 0: /* single */
@@ -3115,8 +3159,20 @@ void btrfs_check_active_zone_reservation(struct btrfs_fs_info *fs_info)
 		      (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM)))
 			continue;
 
-		for (int i = 0; i < map->num_stripes; i++)
-			map->stripes[i].dev->zone_info->reserved_active_zones--;
+		for (int i = 0; i < map->num_stripes; i++) {
+			struct btrfs_device *device = map->stripes[i].dev;
+			struct btrfs_zoned_device_info *zinfo = device->zone_info;
+			u64 physical = map->stripes[i].physical;
+
+			/* A missing device has no zone_info. */
+			if (!device->bdev)
+				continue;
+
+			if (!test_bit(physical >> zinfo->zone_size_shift, zinfo->active_zones))
+				continue;
+
+			zinfo->reserved_active_zones--;
+		}
 	}
 	spin_unlock(&fs_info->zone_active_bgs_lock);
 }

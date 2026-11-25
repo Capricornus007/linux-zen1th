@@ -152,48 +152,29 @@ void profile_tick(int type)
  */
 static ssize_t read_profile(struct kiocb *iocb, struct iov_iter *to)
 {
-	const size_t header_size = sizeof(unsigned int);
-	const size_t file_size = (prof_len + 1) * sizeof(unsigned int);
-	unsigned int sample_step = (unsigned int)(1UL << prof_shift);
-	loff_t offset = iocb->ki_pos;
+	unsigned long p = iocb->ki_pos;
 	size_t count = iov_iter_count(to);
-	size_t pos;
-	size_t done = 0;
-	size_t n, copied;
+	ssize_t read;
+	char *pnt;
+	unsigned int sample_step = (unsigned int)(1UL << prof_shift);
 
-	if (offset < 0)
-		return -EINVAL;
-	if (offset >= file_size)
+	if (p >= (prof_len+1)*sizeof(unsigned int))
 		return 0;
-	pos = offset;
-	count = min(count, file_size - pos);
+	if (count > (prof_len+1)*sizeof(unsigned int) - p)
+		count = (prof_len+1)*sizeof(unsigned int) - p;
+	read = 0;
 
-	/* Copy the four-byte sampling resolution. */
-	if (pos < header_size) {
-		n = min(count, header_size - pos);
-		copied = copy_to_iter((u8 *)&sample_step + pos, n, to);
-		done += copied;
-		if (copied != n)
-			goto fault;
-		pos += n;
-		count -= n;
+	while (p < sizeof(unsigned int) && count > 0) {
+		if (copy_to_iter((char *)(&sample_step)+p, 1, to) != 1)
+			return -EFAULT;
+		p++; count--; read++;
 	}
-
-	/* Copy raw counters using offsets relative to the counter array. */
-	if (count) {
-		copied = copy_to_iter((u8 *)prof_buffer + pos - header_size,
-				      count, to);
-		done += copied;
-		if (copied != count)
-			goto fault;
-	}
-	iocb->ki_pos += done;
-	return done;
-fault:
-	iocb->ki_pos += done;
-	if (!done)
+	pnt = (char *)prof_buffer + p - sizeof(atomic_t);
+	if (copy_to_iter(pnt, count, to) != count)
 		return -EFAULT;
-	return done;
+	read += count;
+	iocb->ki_pos += read;
+	return read;
 }
 
 /* default is to not implement this call */

@@ -2524,11 +2524,10 @@ static int fbcon_do_set_font(struct vc_data *vc, int w, int h, int charcount,
 
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 	if (rotated_saved) {
+		if (saved_rotated.buf)
+			font_data_put(saved_rotated.buf);
 #ifdef CONFIG_FONT_CJK
-		font_data_put(saved_rotated.buf);
 		kvfree(saved_rotated.buf_utf);
-#else
-		kfree(saved_rotated.buf);
 #endif
 	}
 #endif
@@ -2544,11 +2543,10 @@ err_out:
 	 * state.
 	 */
 	if (rotated_saved) {
+		if (par->rotated.buf)
+			font_data_put(par->rotated.buf);
 #ifdef CONFIG_FONT_CJK
-		font_data_put(par->rotated.buf);
 		kvfree(par->rotated.buf_utf);
-#else
-		font_data_put(par->rotated.buf);
 #endif
 		par->rotated = saved_rotated;
 	}

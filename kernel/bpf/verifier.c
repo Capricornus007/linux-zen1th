@@ -7089,9 +7089,10 @@ static int check_stack_access_within_bounds(
 static bool get_func_retval_range(struct bpf_prog *prog,
 				  struct bpf_retval_range *range)
 {
-	if (prog->type == BPF_PROG_TYPE_LSM &&
+	if (IS_ENABLED(CONFIG_BPF_LSM) && prog->type == BPF_PROG_TYPE_LSM &&
 		prog->expected_attach_type == BPF_LSM_MAC &&
-		!bpf_lsm_get_retval_range(prog, range)) {
+		prog->aux->attach_func_proto->type) {
+		bpf_lsm_get_retval_range(prog, range);
 		return true;
 	}
 	return false;
@@ -20281,7 +20282,11 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 		env->insn_aux_data[insn_idx].fastcall_spills_num = i - 1;
 	else
 		subprog->keep_fastcall_stack = 1;
-	subprog->fastcall_stack_off = min(subprog->fastcall_stack_off, off);
+	/*
+	 * The upper end of the longest pattern: no slot of a pattern is above it. Code that never
+	 * runs may have a pattern that ends above the frame pointer.
+	 */
+	subprog->fastcall_stack_off = max(subprog->fastcall_stack_off, min_t(s16, off, 0));
 }
 
 static int mark_fastcall_patterns(struct bpf_verifier_env *env)
@@ -20292,6 +20297,7 @@ static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 	int s, i;
 
 	for (s = 0; s < env->subprog_cnt; ++s, ++subprog) {
+		subprog->fastcall_stack_off = S16_MIN;
 		/* find lowest stack spill offset used in this subprog */
 		lowest_off = 0;
 		for (i = subprog->start; i < (subprog + 1)->start; ++i) {

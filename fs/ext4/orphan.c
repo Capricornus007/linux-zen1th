@@ -5,6 +5,7 @@
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include <linux/string_choices.h>
+#include <kunit/static_stub.h>
 
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -107,6 +108,8 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 	int err = 0, rc;
 	bool dirty = false;
 
+	KUNIT_STATIC_STUB_REDIRECT(ext4_orphan_add, handle, inode);
+
 	if (!sbi->s_journal || is_bad_inode(inode))
 		return 0;
 
@@ -187,6 +190,7 @@ out:
 	ext4_std_error(sb, err);
 	return err;
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_orphan_add);
 
 static int ext4_orphan_file_del(handle_t *handle, struct inode *inode)
 {
@@ -231,6 +235,8 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 	__u32 ino_next;
 	struct ext4_iloc iloc;
 	int err = 0;
+
+	KUNIT_STATIC_STUB_REDIRECT(ext4_orphan_del, handle, inode);
 
 	if (!sbi->s_journal && !(sbi->s_mount_state & EXT4_ORPHAN_FS))
 		return 0;
@@ -308,6 +314,7 @@ out_brelse:
 	brelse(iloc.bh);
 	goto out_err;
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_orphan_del);
 
 #ifdef CONFIG_QUOTA
 static int ext4_quota_on_mount(struct super_block *sb, int type)
@@ -504,6 +511,7 @@ void ext4_orphan_cleanup(struct super_block *sb, struct ext4_super_block *es)
 #endif
 	sb->s_flags = s_flags; /* Restore SB_RDONLY status */
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_orphan_cleanup);
 
 void ext4_release_orphan_info(struct super_block *sb)
 {
@@ -516,6 +524,7 @@ void ext4_release_orphan_info(struct super_block *sb)
 		brelse(oi->of_binfo[i].ob_bh);
 	kvfree(oi->of_binfo);
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_release_orphan_info);
 
 static struct ext4_orphan_block_tail *ext4_orphan_block_tail(
 						struct super_block *sb,
@@ -563,6 +572,7 @@ void ext4_orphan_file_block_trigger(struct jbd2_buffer_trigger_type *triggers,
 	ot = ext4_orphan_block_tail(sb, bh);
 	ot->ob_checksum = cpu_to_le32(csum);
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_orphan_file_block_trigger);
 
 int ext4_init_orphan_info(struct super_block *sb)
 {
@@ -651,6 +661,7 @@ out_put:
 	iput(inode);
 	return ret;
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_init_orphan_info);
 
 int ext4_orphan_file_empty(struct super_block *sb)
 {
@@ -666,3 +677,4 @@ int ext4_orphan_file_empty(struct super_block *sb)
 			return 0;
 	return 1;
 }
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_orphan_file_empty);

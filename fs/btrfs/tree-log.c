@@ -160,6 +160,7 @@ struct walk_control {
 	struct btrfs_path *subvol_path;
 };
 
+__printf(5, 6) __cold
 static void do_abort_log_replay(struct walk_control *wc, const char *function,
 				unsigned int line, int error, const char *fmt, ...)
 {
@@ -433,7 +434,7 @@ static int process_one_buffer(struct extent_buffer *eb,
 
 		if (btrfs_buffer_uptodate(eb, gen, NULL) && level == 0) {
 			ret = btrfs_exclude_logged_extents(eb);
-			if (ret)
+			if (unlikely(ret))
 				btrfs_abort_transaction(trans, ret);
 		}
 	}
@@ -2942,7 +2943,7 @@ static int clean_log_buffer(struct btrfs_trans_handle *trans,
 		int ret;
 
 		ret = btrfs_pin_reserved_extent(trans, eb);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 		return ret;
 	}
@@ -3018,7 +3019,7 @@ static noinline int walk_down_log_tree(struct btrfs_path *path, int *level,
 			path->slots[*level]++;
 			if (wc->free) {
 				ret = btrfs_read_extent_buffer(next, &check);
-				if (ret) {
+				if (unlikely(ret)) {
 					free_extent_buffer(next);
 					if (trans)
 						btrfs_abort_transaction(trans, ret);
@@ -3037,7 +3038,7 @@ static noinline int walk_down_log_tree(struct btrfs_path *path, int *level,
 			continue;
 		}
 		ret = btrfs_read_extent_buffer(next, &check);
-		if (ret) {
+		if (unlikely(ret)) {
 			free_extent_buffer(next);
 			if (trans)
 				btrfs_abort_transaction(trans, ret);
@@ -3066,7 +3067,7 @@ static noinline int walk_up_log_tree(struct btrfs_path *path, int *level,
 	int slot;
 	int ret;
 
-	for (i = *level; i < BTRFS_MAX_LEVEL - 1 && path->nodes[i]; i++) {
+	for (i = *level; i < BTRFS_MAX_LEVEL && path->nodes[i]; i++) {
 		slot = path->slots[i];
 		if (slot + 1 < btrfs_header_nritems(path->nodes[i])) {
 			path->slots[i]++;
@@ -3616,7 +3617,7 @@ static void free_log_tree(struct btrfs_trans_handle *trans,
 
 	if (log->node) {
 		ret = walk_log_tree(&wc);
-		if (ret) {
+		if (unlikely(ret)) {
 			/*
 			 * We weren't able to traverse the entire log tree, the
 			 * typical scenario is getting an -EIO when reading an

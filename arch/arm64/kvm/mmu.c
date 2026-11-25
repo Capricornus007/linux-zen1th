@@ -1587,8 +1587,8 @@ transparent_hugepage_adjust(const struct kvm_s2_fault_desc *s2fd,
 	if (sz < PMD_SIZE)
 		return PAGE_SIZE;
 
-	*gfnp &= ~(PTRS_PER_PMD - 1);
-	*pfnp &= ~(PTRS_PER_PMD - 1);
+	*gfnp = ALIGN_DOWN(*gfnp, PMD_SIZE >> PAGE_SHIFT);
+	*pfnp = ALIGN_DOWN(*pfnp, PMD_SIZE >> PAGE_SHIFT);
 
 	return PMD_SIZE;
 }

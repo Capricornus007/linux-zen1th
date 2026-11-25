@@ -1099,6 +1099,9 @@ int ext4_es_lookup_extent(struct inode *inode, ext4_lblk_t lblk,
 	struct rb_node *node;
 	int found = 0;
 
+	KUNIT_STATIC_STUB_REDIRECT(ext4_es_lookup_extent, inode, lblk,
+				   next_lblk, es, pseq);
+
 	if (EXT4_SB(inode->i_sb)->s_mount_state & EXT4_FC_REPLAY)
 		return 0;
 
@@ -2416,3 +2419,23 @@ static int __revise_pending(struct inode *inode, ext4_lblk_t lblk,
 out:
 	return (ret < 0) ? ret : pendings;
 }
+
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_init_tree);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_insert_extent);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_cache_extent);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_remove_extent);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_find_extent_range);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_lookup_extent);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_scan_range);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_scan_clu);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_register_shrinker);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_unregister_shrinker);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_destroy_stats);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_seq_es_shrinker_info_show);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_init_pending_tree);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_remove_pending);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_is_pending);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_es_insert_delayed_extent);
+EXPORT_SYMBOL_FOR_EXT4_TEST(ext4_clear_inode_es);
+#endif

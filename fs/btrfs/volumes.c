@@ -1378,7 +1378,7 @@ struct btrfs_super_block *btrfs_read_disk_super(struct block_device *bdev,
 		return ERR_PTR(ret);
 	}
 
-	if (bytenr + BTRFS_SUPER_INFO_SIZE >= bdev_nr_bytes(bdev))
+	if (bytenr + BTRFS_SUPER_INFO_SIZE > bdev_nr_bytes(bdev))
 		return ERR_PTR(-EINVAL);
 
 	if (drop_cache) {
@@ -2358,6 +2358,7 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 	struct btrfs_fs_devices *fs_devices = fs_info->fs_devices;
 	u64 num_devices;
 	int ret = 0;
+	bool free_cur_devices = false;
 
 	if (btrfs_fs_incompat(fs_info, EXTENT_TREE_V2)) {
 		btrfs_err(fs_info, "device remove not supported on extent tree v2 yet");
@@ -2440,6 +2441,8 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		btrfs_end_transaction(trans);
+		if (device->bdev)
+			bdev_allow_freeze(device->bdev);
 		return ret;
 	}
 	clear_bit(BTRFS_DEV_STATE_IN_FS_METADATA, &device->dev_state);
@@ -2475,15 +2478,32 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 
 	btrfs_assign_next_active_device(device, NULL);
 
-	if (device->bdev_file) {
+	if (device->bdev_file)
 		cur_devices->open_devices--;
-		/* remove sysfs entry */
-		btrfs_sysfs_remove_device(device);
-	}
+
+	/* Remove sysfs entry, including for a missing device. */
+	btrfs_sysfs_remove_device(device);
 
 	num_devices = btrfs_super_num_devices(fs_info->super_copy) - 1;
 	btrfs_set_super_num_devices(fs_info->super_copy, num_devices);
+
+	/*
+	 * This can happen if cur_devices is the private seed devices list.  We
+	 * cannot call close_fs_devices() here because it expects the uuid_mutex
+	 * to be held, but in fact we don't need that for the private
+	 * seed_devices, we can simply decrement cur_devices->opened and then
+	 * remove it from our list and free the fs_devices.
+	 */
+	if (cur_devices->num_devices == 0) {
+		list_del_rcu(&cur_devices->seed_list);
+		ASSERT(cur_devices->opened == 1, "opened=%d", cur_devices->opened);
+		cur_devices->opened--;
+		free_cur_devices = true;
+	}
+
 	mutex_unlock(&fs_devices->device_list_mutex);
+
+	*bdev_file = device->bdev_file;
 
 	/*
 	 * At this point, the device is zero sized and detached from the
@@ -2503,23 +2523,10 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 		}
 	}
 
-	*bdev_file = device->bdev_file;
 	synchronize_rcu();
 	btrfs_free_device(device);
-
-	/*
-	 * This can happen if cur_devices is the private seed devices list.  We
-	 * cannot call close_fs_devices() here because it expects the uuid_mutex
-	 * to be held, but in fact we don't need that for the private
-	 * seed_devices, we can simply decrement cur_devices->opened and then
-	 * remove it from our list and free the fs_devices.
-	 */
-	if (cur_devices->num_devices == 0) {
-		list_del_init(&cur_devices->seed_list);
-		ASSERT(cur_devices->opened == 1, "opened=%d", cur_devices->opened);
-		cur_devices->opened--;
+	if (free_cur_devices)
 		free_fs_devices(cur_devices);
-	}
 
 	return btrfs_commit_transaction(trans);
 
@@ -2799,7 +2806,7 @@ static void btrfs_setup_sprout(struct btrfs_fs_info *fs_info,
 	fs_devices->open_devices = 0;
 	fs_devices->missing_devices = 0;
 	fs_devices->rotating = false;
-	list_add(&seed_devices->seed_list, &fs_devices->seed_list);
+	list_add_rcu(&seed_devices->seed_list, &fs_devices->seed_list);
 
 	generate_random_uuid(fs_devices->fsid);
 	memcpy(fs_devices->metadata_uuid, fs_devices->fsid, BTRFS_FSID_SIZE);
@@ -2821,11 +2828,15 @@ static void btrfs_rollback_sprout(struct btrfs_fs_info *fs_info,
 	lockdep_assert_held(&uuid_mutex);
 	lockdep_assert_held(&fs_devices->device_list_mutex);
 
-	list_del_init(&seed_devices->seed_list);
-	list_splice_init_rcu(&seed_devices->devices, &fs_devices->devices, synchronize_rcu);
-	list_for_each_entry(device, &fs_devices->devices, dev_list) {
+	list_del_rcu(&seed_devices->seed_list);
+	/*
+	 * Before splicing seed_devices, update the fs_devices of each seed
+	 * device, otherwise a concurrent RCU reader could get a use-after-free
+	 * on device->fs_devices still pointing to seed_devices.
+	 */
+	list_for_each_entry(device, &seed_devices->devices, dev_list)
 		device->fs_devices = fs_devices;
-	}
+	list_splice_init_rcu(&seed_devices->devices, &fs_devices->devices, synchronize_rcu);
 
 	fs_devices->seeding = true;
 	fs_devices->num_devices = seed_devices->num_devices;
@@ -3720,6 +3731,7 @@ static int btrfs_relocate_chunk_finish(struct btrfs_fs_info *fs_info,
 
 	btrfs_discard_cancel_work(&fs_info->discard_ctl, bg);
 	length = bg->length;
+	btrfs_zone_finish_relocated(bg);
 	btrfs_put_block_group(bg);
 
 	/*
@@ -7555,21 +7567,33 @@ struct btrfs_device *btrfs_find_device(const struct btrfs_fs_devices *fs_devices
 	struct btrfs_device *device;
 	struct btrfs_fs_devices *seed_devs;
 
+	/*
+	 * In many cases we are called under the protection of
+	 * fs_devices->device_list_mutex, in others we are not, so always use a
+	 * RCU read section (if a caller needs a wider RCU read section, nesting
+	 * RCU sections works fine).
+	 */
+	rcu_read_lock();
 	if (dev_args_match_fs_devices(args, fs_devices)) {
-		list_for_each_entry(device, &fs_devices->devices, dev_list) {
-			if (dev_args_match_device(args, device))
+		list_for_each_entry_rcu(device, &fs_devices->devices, dev_list) {
+			if (dev_args_match_device(args, device)) {
+				rcu_read_unlock();
 				return device;
+			}
 		}
 	}
 
-	list_for_each_entry(seed_devs, &fs_devices->seed_list, seed_list) {
+	list_for_each_entry_rcu(seed_devs, &fs_devices->seed_list, seed_list) {
 		if (!dev_args_match_fs_devices(args, seed_devs))
 			continue;
-		list_for_each_entry(device, &seed_devs->devices, dev_list) {
-			if (dev_args_match_device(args, device))
+		list_for_each_entry_rcu(device, &seed_devs->devices, dev_list) {
+			if (dev_args_match_device(args, device)) {
+				rcu_read_unlock();
 				return device;
+			}
 		}
 	}
+	rcu_read_unlock();
 
 	return NULL;
 }
@@ -8151,16 +8175,21 @@ int btrfs_read_sys_array(struct btrfs_fs_info *fs_info)
 bool btrfs_check_rw_degradable(struct btrfs_fs_info *fs_info,
 					struct btrfs_device *failing_dev)
 {
+	struct rb_node *node;
 	struct btrfs_chunk_map *map;
-	u64 next_start;
 	bool ret = true;
 
-	map = btrfs_find_chunk_map(fs_info, 0, U64_MAX);
+	read_lock(&fs_info->mapping_tree_lock);
+	node = rb_first_cached(&fs_info->mapping_tree);
 	/* No chunk at all? Return false anyway */
-	if (!map)
+	if (!node) {
+		read_unlock(&fs_info->mapping_tree_lock);
 		return false;
+	}
+	map = rb_entry(node, struct btrfs_chunk_map, rb_node);
 
 	while (map) {
+		const u64 next_start = map->start + map->chunk_len;
 		int missing = 0;
 		int max_tolerated;
 		int i;
@@ -8183,14 +8212,31 @@ bool btrfs_check_rw_degradable(struct btrfs_fs_info *fs_info,
 				btrfs_warn(fs_info,
 	"chunk %llu missing %d devices, max tolerance is %d for writable mount",
 				   map->start, missing, max_tolerated);
-			btrfs_free_chunk_map(map);
-			return false;
+			ret = false;
+			break;
 		}
-		next_start = map->start + map->chunk_len;
-		btrfs_free_chunk_map(map);
 
-		map = btrfs_find_chunk_map(fs_info, next_start, U64_MAX - next_start);
+		if (cond_resched_rwlock_read(&fs_info->mapping_tree_lock)) {
+			map = btrfs_find_chunk_map_nolock(fs_info, next_start,
+							  U64_MAX - next_start);
+			/*
+			 * We got the chunk map while holding the lock so it's
+			 * in the tree and we don't need to keep a ref on it.
+			 * When we don't resched we keep getting chunk maps
+			 * without taking refs on them, since we are holding
+			 * the tree lock.
+			 */
+			btrfs_free_chunk_map(map);
+		} else {
+			node = rb_next(&map->rb_node);
+			if (node)
+				map = rb_entry(node, struct btrfs_chunk_map, rb_node);
+			else
+				map = NULL;
+		}
 	}
+
+	read_unlock(&fs_info->mapping_tree_lock);
 
 	return ret;
 }
@@ -8658,15 +8704,20 @@ int btrfs_get_dev_stats(struct btrfs_fs_info *fs_info,
 	mutex_lock(&fs_devices->device_list_mutex);
 	args.devid = stats->devid;
 	dev = btrfs_find_device(fs_info->fs_devices, &args);
-	mutex_unlock(&fs_devices->device_list_mutex);
 
 	if (!dev) {
+		mutex_unlock(&fs_devices->device_list_mutex);
 		btrfs_warn(fs_info, "get dev_stats failed, device not found");
 		return -ENODEV;
-	} else if (!dev->dev_stats_valid) {
+	}
+
+	if (!dev->dev_stats_valid) {
+		mutex_unlock(&fs_devices->device_list_mutex);
 		btrfs_warn(fs_info, "get dev_stats failed, not yet valid");
 		return -ENODEV;
-	} else if (stats->flags & BTRFS_DEV_STATS_RESET) {
+	}
+
+	if (stats->flags & BTRFS_DEV_STATS_RESET) {
 		for (i = 0; i < BTRFS_DEV_STAT_VALUES_MAX; i++) {
 			if (stats->nr_items > i)
 				stats->values[i] =
@@ -8681,6 +8732,9 @@ int btrfs_get_dev_stats(struct btrfs_fs_info *fs_info,
 			if (stats->nr_items > i)
 				stats->values[i] = btrfs_dev_stat_read(dev, i);
 	}
+
+	mutex_unlock(&fs_devices->device_list_mutex);
+
 	if (stats->nr_items > BTRFS_DEV_STAT_VALUES_MAX)
 		stats->nr_items = BTRFS_DEV_STAT_VALUES_MAX;
 	return 0;

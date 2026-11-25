@@ -690,6 +690,17 @@ enum {
 };
 
 /*
+ * ext4_new_flex_group_data is used by 64bit-resize interface to add a flex
+ * group each time.
+ */
+struct ext4_new_flex_group_data {
+	struct ext4_new_group_data *groups;
+	__u16 *bg_flags;
+	ext4_group_t resize_bg;
+	ext4_group_t count;
+};
+
+/*
  * Flags used by ext4_map_blocks()
  */
 	/* Allocate any needed blocks and/or convert an unwritten
@@ -3059,6 +3070,14 @@ static inline  unsigned char get_dtype(struct super_block *sb, int filetype)
 }
 extern int ext4_check_all_de(struct inode *dir, struct buffer_head *bh,
 			     void *buf, int buf_size);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_is_dx_dir_test(struct inode *inode);
+extern loff_t ext4_dir_hash2pos_test(struct file *filp, __u32 major,
+				     __u32 minor);
+extern __u32 ext4_dir_pos2maj_hash_test(struct file *filp, loff_t pos);
+extern __u32 ext4_dir_pos2min_hash_test(struct file *filp, loff_t pos);
+extern loff_t ext4_get_htree_eof_test(struct file *filp);
+#endif
 
 /* fsync.c */
 extern int ext4_sync_file(struct file *, loff_t, loff_t, int);
@@ -3090,11 +3109,35 @@ extern struct inode * ext4_orphan_get(struct super_block *, unsigned long);
 extern unsigned long ext4_count_free_inodes(struct super_block *);
 extern unsigned long ext4_count_dirs(struct super_block *);
 extern void ext4_mark_bitmap_end(int start_bit, int end_bit, char *bitmap);
+int ext4_itable_zeroout(struct super_block *sb, ext4_fsblk_t blk, int num,
+			int barrier);
 extern int ext4_init_inode_table(struct super_block *sb,
 				 ext4_group_t group, int barrier);
 void ext4_end_bitmap_read(struct bio *bio);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+int ext4_validate_inode_bitmap_test(struct super_block *sb,
+				    struct ext4_group_desc *desc,
+				    ext4_group_t block_group,
+				    struct buffer_head *bh);
+struct buffer_head *ext4_read_inode_bitmap_test(struct super_block *sb,
+						ext4_group_t block_group);
+int ext4_find_group_orlov_test(struct super_block *sb, struct inode *parent,
+			       ext4_group_t *group, umode_t mode,
+			       const struct qstr *qstr);
+int ext4_find_group_other_test(struct super_block *sb, struct inode *parent,
+			       ext4_group_t *group, umode_t mode);
+int ext4_recently_deleted_test(struct super_block *sb, ext4_group_t group,
+			       int ino);
+int ext4_find_inode_bit_test(struct super_block *sb, ext4_group_t group,
+			     struct buffer_head *bitmap, unsigned long *ino);
+int ext4_xattr_credits_for_new_inode_test(struct inode *dir, mode_t mode,
+					  bool encrypt);
+#endif
 
 /* fast_commit.c */
+int ext4_fc_get_buf(journal_t *journal, struct buffer_head **bh);
+void ext4_fc_submit_bh(struct super_block *sb, bool is_tail);
+int ext4_fc_issue_flush(struct block_device *bdev);
 int ext4_fc_info_show(struct seq_file *seq, void *v);
 void ext4_fc_init(struct super_block *sb, journal_t *journal);
 void ext4_fc_init_inode(struct inode *inode);
@@ -3121,6 +3164,38 @@ void ext4_fc_destroy_dentry_cache(void);
 int ext4_fc_record_regions(struct super_block *sb, int ino,
 			   ext4_lblk_t lblk, ext4_fsblk_t pblk,
 			   int len, int replay);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+void ext4_fc_set_snap_err_test(int *snap_err, int err);
+bool ext4_fc_disabled_test(struct super_block *sb);
+bool ext4_fc_eligible_test(struct super_block *sb);
+void ext4_fc_snap_stats_update_max_test(atomic64_t *stat, u64 value);
+void ext4_fc_wake_inode_state_test(struct inode *inode, int bit);
+u8 *ext4_fc_reserve_space_test(struct super_block *sb, int len, u32 *crc);
+int ext4_fc_write_tail_test(struct super_block *sb, u32 crc);
+bool ext4_fc_add_tlv_test(struct super_block *sb, u16 tag, u16 len, u8 *val,
+			  u32 *crc);
+int ext4_fc_write_inode_test(struct inode *inode, u32 *crc);
+int ext4_fc_write_inode_data_test(struct inode *inode, u32 *crc);
+void ext4_fc_free_inode_snap_test(struct inode *inode);
+int ext4_fc_snapshot_inode_test(struct inode *inode,
+				unsigned int nr_ranges_total,
+				unsigned int *nr_rangesp, int *snap_err);
+unsigned int ext4_fc_count_snapshot_inodes_test(struct super_block *sb);
+int ext4_fc_alloc_snapshot_inodes_test(struct super_block *sb,
+				       struct inode ***inodesp,
+				       unsigned int *nr_inodesp);
+int ext4_fc_snapshot_inodes_test(journal_t *journal, struct inode **inodes,
+				 unsigned int inodes_size,
+				 unsigned int *nr_inodesp,
+				 unsigned int *nr_rangesp, int *snap_err);
+void ext4_fc_update_stats_test(struct super_block *sb, int status,
+			       u64 commit_time, int nblks, tid_t commit_tid);
+void ext4_fc_cleanup_test(journal_t *journal, int full, tid_t tid);
+int ext4_fc_record_modified_inode_test(struct super_block *sb, int ino);
+bool ext4_fc_value_len_isvalid_test(struct ext4_sb_info *sbi, int tag, int len);
+int ext4_fc_replay_test(journal_t *journal, struct buffer_head *bh,
+			enum passtype pass, int off, tid_t expected_tid);
+#endif
 
 /* mballoc.c */
 extern const struct seq_operations ext4_mb_seq_groups_ops;
@@ -3257,6 +3332,37 @@ extern void ext4_da_update_reserve_space(struct inode *inode,
 extern int ext4_issue_zeroout(handle_t *handle, struct inode *inode,
 			      ext4_lblk_t lblk, ext4_fsblk_t pblk,
 			      ext4_lblk_t len);
+struct buffer_head *ext4_sb_getblk(struct super_block *sb, ext4_fsblk_t block);
+struct buffer_head *ext4_sb_find_get_block(struct super_block *sb,
+					   ext4_fsblk_t block);
+struct buffer_head *ext4_sb_find_get_block_nonatomic(struct super_block *sb,
+						  ext4_fsblk_t block);
+struct buffer_head *ext4_sb_getblk_unmovable(struct super_block *sb,
+					     ext4_fsblk_t block);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+int ext4_inode_csum_verify_test(struct inode *inode, struct ext4_inode *raw,
+				struct ext4_inode_info *ei);
+int ext4_inode_blocks_set_test(struct ext4_inode *raw_inode,
+			       struct ext4_inode_info *ei);
+blkcnt_t ext4_inode_blocks_test(struct ext4_inode *raw_inode,
+				struct ext4_inode_info *ei);
+int ext4_fill_raw_inode_test(struct inode *inode,
+			     struct ext4_inode *raw_inode);
+int ext4_expand_extra_isize_test(struct inode *inode,
+				 unsigned int new_extra_isize,
+				 struct ext4_iloc *iloc,
+				 handle_t *handle, int *no_expand);
+int ext4_try_to_expand_extra_isize_test(struct inode *inode,
+					unsigned int new_extra_isize,
+					struct ext4_iloc *iloc,
+					handle_t *handle);
+int ext4_da_reserve_space_test(struct inode *inode, int nr_resv);
+int ext4_clu_alloc_state_test(struct inode *inode, ext4_lblk_t lblk);
+int ext4_insert_delayed_blocks_test(struct inode *inode, ext4_lblk_t lblk,
+				    ext4_lblk_t len);
+int ext4_da_map_blocks_test(struct inode *inode, struct ext4_map_blocks *map);
+int ext4_nonda_switch_test(struct super_block *sb);
+#endif
 
 static inline bool is_special_ino(struct super_block *sb, unsigned long ino)
 {
@@ -3276,6 +3382,10 @@ extern int ext4_ind_trans_blocks(struct inode *inode, int nrblocks);
 extern void ext4_ind_truncate(handle_t *, struct inode *inode);
 extern int ext4_ind_remove_space(handle_t *handle, struct inode *inode,
 				 ext4_lblk_t start, ext4_lblk_t end);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_block_to_path_test(struct inode *inode, ext4_lblk_t i_block,
+				   ext4_lblk_t offsets[4], int *boundary);
+#endif
 
 /* ioctl.c */
 extern long ext4_ioctl(struct file *, unsigned int, unsigned long);
@@ -3286,10 +3396,47 @@ int ext4_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
 extern void ext4_reset_inode_seed(struct inode *inode);
 int ext4_update_overhead(struct super_block *sb, bool force);
 int ext4_force_shutdown(struct super_block *sb, u32 flags);
+int ext4_ioctl_sync_bh(struct buffer_head *bh);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+struct ext4_tune_sb_params;
+void ext4_sb_setlabel_test(struct ext4_sb_info *sbi,
+			   struct ext4_super_block *es, const void *arg);
+void ext4_sb_setuuid_test(struct ext4_sb_info *sbi,
+			  struct ext4_super_block *es, const void *arg);
+void ext4_sb_setparams_test(struct ext4_sb_info *sbi,
+			    struct ext4_super_block *es, const void *arg);
+int ext4_validate_tune_sb_params_test(struct super_block *sb,
+				      struct ext4_tune_sb_params *params);
+int ext4_update_primary_sb_test(struct super_block *sb, handle_t *handle,
+				void (*func)(struct ext4_sb_info *,
+					     struct ext4_super_block *,
+					     const void *),
+				const void *arg);
+int ext4_update_backup_sb_test(struct super_block *sb, handle_t *handle,
+			       ext4_group_t grp,
+			       void (*func)(struct ext4_sb_info *,
+					    struct ext4_super_block *,
+					    const void *),
+			       const void *arg);
+int ext4_update_superblocks_fn_test(struct super_block *sb,
+				    void (*func)(struct ext4_sb_info *,
+						 struct ext4_super_block *,
+						 const void *),
+				    const void *arg);
+void ext4_swap_inode_data_test(struct inode *inode1, struct inode *inode2);
+int ext4_ioctl_check_immutable_test(struct inode *inode, __u32 new_projid,
+				    unsigned int flags);
+bool ext4_dax_compatible_test(struct inode *inode, unsigned int oldflags,
+			      unsigned int flags);
+#endif
 
 /* migrate.c */
 extern int ext4_ext_migrate(struct inode *);
 extern int ext4_ind_migrate(struct inode *inode);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_ext_swap_inode_data_test(handle_t *handle, struct inode *inode,
+					 struct inode *tmp_inode);
+#endif
 
 /* namei.c */
 extern int ext4_init_new_dir(handle_t *handle, struct inode *dir,
@@ -3315,6 +3462,8 @@ extern bool ext4_empty_dir(struct inode *inode);
 
 /* resize.c */
 extern void ext4_kvfree_array_rcu(void *to_free);
+extern int ext4_resize_issue_zeroout(struct super_block *sb, sector_t blk,
+				     sector_t nr_blks, gfp_t gfp_mask);
 extern int ext4_group_add(struct super_block *sb,
 				struct ext4_new_group_data *input);
 extern int ext4_group_extend(struct super_block *sb,
@@ -3324,6 +3473,25 @@ extern int ext4_resize_fs(struct super_block *sb, ext4_fsblk_t n_blocks_count);
 extern unsigned int ext4_list_backups(struct super_block *sb,
 				      unsigned int *three, unsigned int *five,
 				      unsigned int *seven);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_verify_group_input_test(struct super_block *sb,
+					struct ext4_new_group_data *input);
+extern struct ext4_new_flex_group_data *
+ext4_alloc_flex_gd_test(unsigned int flexbg_size, ext4_group_t o_group,
+			ext4_group_t n_group);
+extern void ext4_free_flex_gd_test(struct ext4_new_flex_group_data *flex_gd);
+extern int ext4_alloc_group_tables_test(struct super_block *sb,
+					struct ext4_new_flex_group_data *flex_gd,
+					unsigned int flexbg_size);
+extern int ext4_verify_reserved_gdb_test(struct super_block *sb,
+					 ext4_group_t end,
+					 struct buffer_head *primary);
+extern int ext4_setup_next_flex_gd_test(struct super_block *sb,
+					struct ext4_new_flex_group_data *flex_gd,
+					ext4_fsblk_t n_blocks_count);
+extern int ext4_convert_meta_bg_test(struct super_block *sb,
+				     struct inode *inode);
+#endif
 
 /* super.c */
 extern struct buffer_head *ext4_sb_bread(struct super_block *sb,
@@ -3352,6 +3520,51 @@ extern void ext4_mark_group_bitmap_corrupted(struct super_block *sb,
 extern unsigned int ext4_num_base_meta_blocks(struct super_block *sb,
 					      ext4_group_t block_group);
 extern void print_daily_error_info(struct timer_list *t);
+
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_errno_to_code_test(int err);
+extern void ext4_save_error_info_test(struct super_block *sb, int error,
+				      __u32 ino, __u64 block,
+				      const char *func, unsigned int line);
+extern void ext4_update_super_test(struct super_block *sb);
+extern int ext4_check_descriptors_test(struct super_block *sb,
+				       ext4_fsblk_t sb_block,
+				       ext4_group_t *first_not_zeroed);
+extern loff_t ext4_max_size_test(int blkbits, int has_huge_files);
+extern loff_t ext4_max_bitmap_size_test(int bits, int has_huge_files);
+extern ext4_fsblk_t ext4_descriptor_loc_test(struct super_block *sb,
+					     ext4_fsblk_t logical_sb_block,
+					     int nr);
+extern unsigned long ext4_get_stripe_size_test(struct ext4_sb_info *sbi);
+extern int ext4_count_overhead_test(struct super_block *sb, ext4_group_t grp,
+				    char *buf);
+extern void ext4_set_resv_clusters_test(struct super_block *sb);
+extern void ext4_set_def_opts_test(struct super_block *sb,
+				   struct ext4_super_block *es);
+extern int ext4_handle_clustersize_test(struct super_block *sb);
+extern int ext4_inode_info_init_test(struct super_block *sb,
+				     struct ext4_super_block *es);
+extern int ext4_init_metadata_csum_test(struct super_block *sb,
+					struct ext4_super_block *es);
+extern int ext4_check_feature_compatibility_test(struct super_block *sb,
+						 struct ext4_super_block *es,
+						 int silent);
+extern int ext4_check_geometry_test(struct super_block *sb,
+				    struct ext4_super_block *es);
+extern int ext4_hash_info_init_test(struct super_block *sb);
+extern int ext4_block_group_meta_init_test(struct super_block *sb, int silent);
+extern int ext4_fill_flex_info_test(struct super_block *sb);
+extern void ext4_flex_groups_free_test(struct ext4_sb_info *sbi);
+extern int ext4_show_options_test(struct seq_file *seq, struct super_block *sb,
+				  int nodefs);
+extern int ext4_statfs_test(struct dentry *dentry, struct kstatfs *buf);
+extern int ext4_parse_and_apply_options_test(struct super_block *sb,
+					     const char *options,
+					     bool is_remount);
+extern int ext4_parse_sb_mount_options_test(struct super_block *sb,
+					    unsigned long *journal_devnum,
+					    unsigned int *journal_ioprio);
+#endif
 
 extern __printf(7, 8)
 void __ext4_error(struct super_block *, const char *, unsigned int, bool,
@@ -3540,8 +3753,8 @@ static inline ext4_fsblk_t ext4_free_blocks_count(struct ext4_super_block *es)
 static inline void ext4_blocks_count_set(struct ext4_super_block *es,
 					 ext4_fsblk_t blk)
 {
-	es->s_blocks_count_lo = cpu_to_le32((u32)blk);
-	es->s_blocks_count_hi = cpu_to_le32(blk >> 32);
+	es->s_blocks_count_lo = cpu_to_le32(lower_32_bits(blk));
+	es->s_blocks_count_hi = cpu_to_le32(upper_32_bits(blk));
 }
 
 static inline void ext4_free_blocks_count_set(struct ext4_super_block *es,
@@ -3832,6 +4045,8 @@ extern const struct file_operations ext4_file_operations;
 extern loff_t ext4_llseek(struct file *file, loff_t offset, int origin);
 
 /* inline.c */
+extern struct buffer_head *ext4_inline_getblk(struct super_block *sb,
+					      ext4_fsblk_t block);
 extern int ext4_get_max_inline_size(struct inode *inode);
 extern int ext4_find_inline_data_nolock(struct inode *inode);
 extern int ext4_destroy_inline_data(handle_t *handle, struct inode *inode);
@@ -3943,6 +4158,14 @@ extern int ext4_register_sysfs(struct super_block *sb);
 extern void ext4_unregister_sysfs(struct super_block *sb);
 extern int __init ext4_init_sysfs(void);
 extern void ext4_exit_sysfs(void);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern ssize_t ext4_sysfs_attr_show_test(struct ext4_sb_info *sbi,
+					 const char *name, char *buf);
+extern ssize_t ext4_sysfs_attr_store_test(struct ext4_sb_info *sbi,
+					  const char *name, const char *buf,
+					  size_t len);
+extern ssize_t ext4_sysfs_feat_show_test(const char *name, char *buf);
+#endif
 
 /* block_validity */
 extern void ext4_release_system_zone(struct super_block *sb);
@@ -4038,6 +4261,14 @@ extern void ext4_double_up_write_data_sem(struct inode *orig_inode,
 extern int ext4_move_extents(struct file *o_filp, struct file *d_filp,
 			     __u64 start_orig, __u64 start_donor,
 			     __u64 len, __u64 *moved_len);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_mext_check_validity_test(struct inode *orig_inode,
+					 struct inode *donor_inode);
+extern int ext4_mext_check_adjust_range_test(struct inode *orig_inode,
+					     struct inode *donor_inode,
+					     __u64 orig_start,
+					     __u64 donor_start, __u64 *len);
+#endif
 
 /* page-io.c */
 /*
@@ -4065,9 +4296,25 @@ extern void ext4_iomap_end_bio(struct bio *bio);
 
 /* mmp.c */
 extern int ext4_multi_mount_protect(struct super_block *, ext4_fsblk_t);
-
-/* mmp.c */
 extern void ext4_stop_mmpd(struct ext4_sb_info *sbi);
+extern int ext4_mmp_submit_write(struct buffer_head *bh);
+extern int ext4_mmp_load_bh(struct super_block *sb, struct buffer_head **bh,
+			    ext4_fsblk_t mmp_block);
+extern long ext4_mmp_wait_timeout(long timeout);
+extern struct task_struct *ext4_mmp_run_thread(struct super_block *sb,
+					       const char *bdevname,
+					       int bdevname_len);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern int ext4_mmp_csum_verify_test(struct super_block *sb,
+				     struct mmp_struct *mmp);
+extern void ext4_mmp_csum_set_test(struct super_block *sb,
+				   struct mmp_struct *mmp);
+extern int ext4_read_mmp_block_test(struct super_block *sb,
+				    struct buffer_head **bh,
+				    ext4_fsblk_t mmp_block);
+extern int ext4_write_mmp_block_test(struct super_block *sb,
+				     struct buffer_head *bh);
+#endif
 
 /* verity.c */
 extern const struct fsverity_operations ext4_verityops;
@@ -4162,6 +4409,8 @@ extern int ext4_block_write_begin(handle_t *handle, struct folio *folio,
 #if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
 #define EXPORT_SYMBOL_FOR_EXT4_TEST(sym) \
 	EXPORT_SYMBOL_FOR_MODULES(sym, "ext4-test")
+#else
+#define EXPORT_SYMBOL_FOR_EXT4_TEST(sym)
 #endif
 #endif	/* __KERNEL__ */
 

@@ -17,6 +17,7 @@
 #include "device-id/ccw.h"
 #include "device-id/cdx.h"
 #include "device-id/coreboot.h"
+#include "device-id/cpu_feature.h"
 #include "device-id/css.h"
 #include "device-id/dfl.h"
 #include "device-id/dmi.h"

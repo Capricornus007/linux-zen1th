@@ -195,7 +195,7 @@ static inline void dev_base_seq_inc(struct net *net)
 
 static inline struct hlist_head *dev_name_hash(struct net *net, const char *name)
 {
-	unsigned int hash = full_name_hash(net, name, strnlen(name, IFNAMSIZ));
+	unsigned int hash = full_name_hash(NULL, name, strnlen(name, IFNAMSIZ));
 
 	return &net->dev_name_head[hash_32(hash, NETDEV_HASHBITS)];
 }
@@ -1749,8 +1749,10 @@ static int __dev_open(struct net_device *dev, struct netlink_ext_ack *extack)
 
 	ret = call_netdevice_notifiers_extack(NETDEV_PRE_UP, dev, extack);
 	ret = notifier_to_errno(ret);
-	if (ret)
+	if (ret) {
+		netpoll_poll_enable(dev);
 		return ret;
+	}
 
 	set_bit(__LINK_STATE_START, &dev->state);
 

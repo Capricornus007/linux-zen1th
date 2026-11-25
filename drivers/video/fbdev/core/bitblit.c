@@ -173,7 +173,7 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 idx = vc->vc_font.width >> 3;
-	struct fbcon_par *par = info->fbcon_par;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
 	u32 s_pitch = font_glyph_pitch(s_width);
 	const unsigned char *src;
 
@@ -190,10 +190,10 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 
 		src = font_bits(vc, ch, c_utf, continuation, cellsize, NULL);
 #else
-		src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, ch);
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
 #endif
 		if (!src) {
-			src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, '\0');
+			src = font_data_glyph_buf(fd, s_width, s_vpitch, '\0');
 			if (!src)
 				goto next_char;
 		}
@@ -227,7 +227,7 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 	u32 shift_low = 0, mod = vc->vc_font.width % 8;
 	u32 shift_high = 8;
 	u32 idx = vc->vc_font.width >> 3;
-	struct fbcon_par *par = info->fbcon_par;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
 	u32 s_pitch = font_glyph_pitch(s_width);
 	const unsigned char *src;
 
@@ -244,10 +244,10 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 
 		src = font_bits(vc, ch, c_utf, continuation, cellsize, NULL);
 #else
-		src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, ch);
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
 #endif
 		if (!src) {
-			src = font_data_glyph_buf(par->p->fontdata, s_width, s_vpitch, '\0');
+			src = font_data_glyph_buf(fd, s_width, s_vpitch, '\0');
 			if (!src)
 				goto next_char;
 		}
@@ -394,6 +394,7 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	int width = vc->vc_font.width;
 	int vpitch = vc->vc_font.height;
 	int cellsize = font_glyph_size(width, vpitch);
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
 	int c;
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
@@ -418,10 +419,10 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 		src = font_bits(vc, c, c_utf, continuation, cellsize, NULL);
 	}
 #else
-	src = font_data_glyph_buf(par->p->fontdata, width, vpitch, c);
+	src = font_data_glyph_buf(fd, width, vpitch, c);
 #endif
 	if (!src) {
-		src = font_data_glyph_buf(par->p->fontdata, width, vpitch, '\0');
+		src = font_data_glyph_buf(fd, width, vpitch, '\0');
 		if (!src)
 			return;
 	}

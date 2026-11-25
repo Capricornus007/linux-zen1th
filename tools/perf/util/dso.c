@@ -687,14 +687,17 @@ static int open_dso(struct dso *dso, struct machine *machine)
 {
 	int fd;
 	struct nscookie nsc;
+	enum dso_binary_type bt = dso__binary_type(dso);
+	bool nsenter = bt != DSO_BINARY_TYPE__BUILD_ID_CACHE &&
+		       bt != DSO_BINARY_TYPE__BUILD_ID_CACHE_DEBUGINFO;
 
-	if (dso__binary_type(dso) != DSO_BINARY_TYPE__BUILD_ID_CACHE) {
+	if (nsenter) {
 		mutex_lock(dso__lock(dso));
 		nsinfo__mountns_enter(dso__nsinfo(dso), &nsc);
 		mutex_unlock(dso__lock(dso));
 	}
 	fd = __open_dso(dso, machine);
-	if (dso__binary_type(dso) != DSO_BINARY_TYPE__BUILD_ID_CACHE)
+	if (nsenter)
 		nsinfo__mountns_exit(&nsc);
 
 	if (fd >= 0) {
@@ -1802,12 +1805,13 @@ bool dso__loaded(const struct dso *dso)
 
 bool dso__sorted_by_name(const struct dso *dso)
 {
-	return RC_CHK_ACCESS(dso)->sorted_by_name;
-}
+	struct symbols *symbols = (struct symbols *)&RC_CHK_ACCESS(dso)->symbols;
+	bool res;
 
-void dso__set_sorted_by_name(struct dso *dso)
-{
-	RC_CHK_ACCESS(dso)->sorted_by_name = true;
+	down_read(&symbols->lock);
+	res = symbols->sorted_by_name;
+	up_read(&symbols->lock);
+	return res;
 }
 
 struct dso *dso__new_id(const char *name, const struct dso_id *id)
@@ -1825,9 +1829,7 @@ struct dso *dso__new_id(const char *name, const struct dso_id *id)
 			dso->id = *id;
 		dso__set_long_name_id(res, dso->name, false);
 		dso__set_short_name(res, dso->name, false);
-		dso->symbols = RB_ROOT_CACHED;
-		dso->symbol_names = NULL;
-		dso->symbol_names_len = 0;
+		symbols__init(&dso->symbols);
 		dso->inlined_nodes = RB_ROOT_CACHED;
 		dso->srclines = RB_ROOT_CACHED;
 		dso->data_types = RB_ROOT;
@@ -1838,7 +1840,6 @@ struct dso *dso__new_id(const char *name, const struct dso_id *id)
 		dso->is_64_bit = (sizeof(void *) == 8);
 		dso->loaded = 0;
 		dso->rel = 0;
-		dso->sorted_by_name = 0;
 		dso->has_srcline = 1;
 		dso->a2l_fails = 1;
 		dso->kernel = DSO_SPACE__USER;
@@ -1869,9 +1870,7 @@ void dso__delete(struct dso *dso)
 	/* free inlines first, as they reference symbols */
 	inlines__tree_delete(&RC_CHK_ACCESS(dso)->inlined_nodes);
 	srcline__tree_delete(&RC_CHK_ACCESS(dso)->srclines);
-	symbols__delete(&RC_CHK_ACCESS(dso)->symbols);
-	RC_CHK_ACCESS(dso)->symbol_names_len = 0;
-	zfree(&RC_CHK_ACCESS(dso)->symbol_names);
+	symbols__exit(&RC_CHK_ACCESS(dso)->symbols);
 	annotated_data_type__tree_delete(dso__data_types(dso));
 	global_var_type__tree_delete(dso__global_vars(dso));
 
@@ -1998,22 +1997,34 @@ static size_t dso__fprintf_buildid(struct dso *dso, FILE *fp)
 	return fprintf(fp, "%s", sbuild_id);
 }
 
+struct dso__fprintf_cb_args {
+	FILE *fp;
+	size_t ret;
+};
+
+static int dso__fprintf_cb(struct symbol *pos, void *data)
+{
+	struct dso__fprintf_cb_args *args = data;
+
+	args->ret += symbol__fprintf(pos, args->fp);
+	return 0;
+}
+
 size_t dso__fprintf(struct dso *dso, FILE *fp)
 {
-	struct rb_node *nd;
-	size_t ret = fprintf(fp, "dso: %s (", dso__short_name(dso));
+	struct dso__fprintf_cb_args args = {
+		.fp = fp,
+		.ret = fprintf(fp, "dso: %s (", dso__short_name(dso)),
+	};
 
 	if (dso__short_name(dso) != dso__long_name(dso))
-		ret += fprintf(fp, "%s, ", dso__long_name(dso));
-	ret += fprintf(fp, "%sloaded, ", dso__loaded(dso) ? "" : "NOT ");
-	ret += dso__fprintf_buildid(dso, fp);
-	ret += fprintf(fp, ")\n");
-	for (nd = rb_first_cached(dso__symbols(dso)); nd; nd = rb_next(nd)) {
-		struct symbol *pos = rb_entry(nd, struct symbol, rb_node);
-		ret += symbol__fprintf(pos, fp);
-	}
+		args.ret += fprintf(fp, "%s, ", dso__long_name(dso));
+	args.ret += fprintf(fp, "%sloaded, ", dso__loaded(dso) ? "" : "NOT ");
+	args.ret += dso__fprintf_buildid(dso, fp);
+	args.ret += fprintf(fp, ")\n");
+	dso__for_each_symbol(dso, dso__fprintf_cb, &args);
 
-	return ret;
+	return args.ret;
 }
 
 enum dso_type dso__type(struct dso *dso, struct machine *machine)

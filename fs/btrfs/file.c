@@ -450,7 +450,7 @@ delete_extent_item:
 		 */
 		path->slots[0] = del_slot;
 		ret = btrfs_del_items(trans, root, path, del_slot, del_nr);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
@@ -773,7 +773,7 @@ again:
 
 mark_dirty:
 	ret = btrfs_inode_set_file_extent_range(inode, start, end - start);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;
@@ -916,7 +916,14 @@ lock_and_cleanup_extent(struct btrfs_inode *inode, struct folio *folio,
 				    cached_state);
 		folio_unlock(folio);
 		folio_put(folio);
-		btrfs_start_ordered_extent(ordered);
+		/*
+		 * Waiting for the ordered extent blocks uninterruptibly, which
+		 * a nowait caller must not do.  Leave it alone and let the
+		 * caller retry where blocking is acceptable, like
+		 * btrfs_try_lock_ordered_range() does.
+		 */
+		if (!nowait)
+			btrfs_start_ordered_extent(ordered);
 		btrfs_put_ordered_extent(ordered);
 		return -EAGAIN;
 	}
@@ -2114,7 +2121,7 @@ static int fill_holes(struct btrfs_trans_handle *trans,
 		btrfs_set_file_extent_generation(leaf, fi, trans->transid);
 		if (del_slot >= 0) {
 			ret = btrfs_del_items(trans, root, path, del_slot, 1);
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				btrfs_release_path(path);
 				return ret;
@@ -2762,7 +2769,10 @@ static int btrfs_punch_hole(struct file *file, loff_t offset, loff_t len)
 	if (update_times)
 		inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
 	ret = btrfs_update_inode(trans, BTRFS_I(inode));
-	updated_inode = true;
+	if (ret)
+		btrfs_abort_transaction(trans, ret);
+	else
+		updated_inode = true;
 	btrfs_end_transaction(trans);
 	btrfs_btree_balance_dirty(fs_info);
 out:
@@ -2787,6 +2797,8 @@ out_only_mutex:
 			int ret2;
 
 			ret = btrfs_update_inode(trans, BTRFS_I(inode));
+			if (ret)
+				btrfs_abort_transaction(trans, ret);
 			ret2 = btrfs_end_transaction(trans);
 			if (!ret)
 				ret = ret2;
@@ -3065,11 +3077,13 @@ reserve_space:
 						update_times);
 		btrfs_unlock_extent(&BTRFS_I(inode)->io_tree, lockstart, lockend,
 				    &cached_state);
-		/* btrfs_prealloc_file_range releases reserved space on error */
-		if (ret) {
-			space_reserved = false;
+		/*
+		 * btrfs_prealloc_file_range() releases reserved space both when
+		 * it succeeds (by allocating extents) and when it errors out.
+		 */
+		space_reserved = false;
+		if (ret)
 			goto out;
-		}
 	}
 	ret = btrfs_fallocate_update_isize(inode, offset + len, mode,
 					   update_times);

@@ -3421,9 +3421,6 @@ int security_namespace_init(struct ns_common *ns)
  */
 void security_namespace_free(struct ns_common *ns)
 {
-	if (!ns->ns_security)
-		return;
-
 	call_void_hook(namespace_free, ns);
 
 	kfree(ns->ns_security);

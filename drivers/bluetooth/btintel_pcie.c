@@ -539,7 +539,7 @@ static void btintel_pcie_set_tx_db(struct btintel_pcie_data *data, u16 index)
 	val = index;
 	val |= (BTINTEL_PCIE_TX_DB_VEC << 16);
 
-	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	btintel_pcie_wr_wrptr(data, val);
 }
 
 /* Copy the data to next(@tfd_index) data buffer and update the TFD(transfer
@@ -753,7 +753,7 @@ static void btintel_pcie_set_rx_db(struct btintel_pcie_data *data, u16 index)
 	val = index;
 	val |= (BTINTEL_PCIE_RX_DB_VEC << 16);
 
-	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	btintel_pcie_wr_wrptr(data, val);
 }
 
 /* Update the FRBD (free buffer descriptor) with the @frbd_index and the
@@ -1034,6 +1034,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 
 		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
 		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
+			mutex_lock(&data->mac_access_lock);
 			ret = btintel_pcie_get_mac_access(data);
 			if (ret) {
 				BT_WARN("YoYo: MAC access failed for config set (%d), skipping",
@@ -1043,6 +1044,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 				 * request bit is not leaked.
 				 */
 				btintel_pcie_release_mac_access(data);
+				mutex_unlock(&data->mac_access_lock);
 				continue;
 			}
 		}
@@ -1074,7 +1076,10 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 				}
 
 				BT_DBG("YoYo: CSR write [0x%08x] = 0x%08x", addr, value);
+				/* addr may be PRPH_DEV_* or HBUS_TARG_WRPTR */
+				spin_lock(&data->dev_mem_lock);
 				btintel_pcie_wr_reg32(data, addr, value);
+				spin_unlock(&data->dev_mem_lock);
 				break;
 			/* Indirect Address Access (Peripheral MAC and Device Memory) */
 			case BTINTEL_PCIE_CFGSET_PERIPH_MAC:
@@ -1088,12 +1093,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 					continue;
 				}
 
-				btintel_pcie_wr_reg32(data,
-						      BTINTEL_PCIE_PRPH_DEV_ADDR_REG,
-						      addr);
-				btintel_pcie_wr_reg32(data,
-						      BTINTEL_PCIE_PRPH_DEV_WR_REG,
-						      value);
+				btintel_pcie_wr_dev_mem(data, addr, value);
 				BT_DBG("YoYo: indirect write type %u addr 0x%08x value 0x%08x",
 				       config_set->config_set_type, addr, value);
 				break;
@@ -1105,8 +1105,10 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 		}
 
 		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
-		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM)
+		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
 			btintel_pcie_release_mac_access(data);
+			mutex_unlock(&data->mac_access_lock);
+		}
 	}
 }
 
@@ -1753,15 +1755,19 @@ static void btintel_pcie_dump_traces(struct hci_dev *hdev)
 	struct btintel_pcie_data *data = hci_get_drvdata(hdev);
 	int ret;
 
+	mutex_lock(&data->mac_access_lock);
 	ret = btintel_pcie_get_mac_access(data);
 	if (ret) {
 		bt_dev_err(hdev, "Failed to get mac access: (%d)", ret);
+		btintel_pcie_release_mac_access(data);
+		mutex_unlock(&data->mac_access_lock);
 		return;
 	}
 
 	ret = btintel_pcie_read_debug_regions(data);
 
 	btintel_pcie_release_mac_access(data);
+	mutex_unlock(&data->mac_access_lock);
 
 	if (ret)
 		bt_dev_err(hdev, "Failed to dump traces: (%d)", ret);
@@ -1885,9 +1891,12 @@ static int btintel_pcie_read_device_mem(struct btintel_pcie_data *data,
 	u32 *val = buf;
 
 	/* Get device mac access */
+	mutex_lock(&data->mac_access_lock);
 	err = btintel_pcie_get_mac_access(data);
 	if (err) {
 		bt_dev_err(data->hdev, "Failed to get mac access %d", err);
+		btintel_pcie_release_mac_access(data);
+		mutex_unlock(&data->mac_access_lock);
 		return err;
 	}
 
@@ -1900,6 +1909,7 @@ static int btintel_pcie_read_device_mem(struct btintel_pcie_data *data,
 		*val = btintel_pcie_rd_dev_mem(data, dev_addr);
 
 	btintel_pcie_release_mac_access(data);
+	mutex_unlock(&data->mac_access_lock);
 
 	return 0;
 }
@@ -1985,25 +1995,6 @@ static int btintel_parse_mbox_tlv(struct btintel_pcie_data *data)
 	struct mbox_tlv *tlv;
 	struct btintel_data *cnvi_data = hci_get_priv(data->hdev);
 	u8 hw_variant = INTEL_HW_VARIANT(cnvi_data->cnvi_bt);
-	long t;
-
-	/* Wait for GP0 alive interrupt to post RX buffers */
-	t = wait_event_timeout(data->mbox_parse_wait_q,
-			       test_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags),
-			       msecs_to_jiffies(BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS));
-	if (!t) {
-		bt_dev_warn(data->hdev,
-			    "Timeout (%u ms) waiting for alive interrupt before mbox TLV parse; skipping",
-			    BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS);
-		return 0;
-	}
-	clear_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-
-	if (data->log_mask & BTINTEL_PCIE_LOG_MBOX)
-		bt_dev_info(data->hdev,
-			    "mbox TLV parse started at %lld ns (%lld us after mbox interrupt)",
-			    ktime_to_ns(ktime_get()),
-			    ktime_to_us(ktime_sub(ktime_get(), data->mbox_intr_ts)));
 
 	memset(&data->dump_info, 0, sizeof(data->dump_info));
 
@@ -2287,23 +2278,12 @@ static void btintel_pcie_msix_gp1_handler(struct btintel_pcie_data *data)
 	if (target_access &&
 	    !test_and_set_bit(BTINTEL_PCIE_MAIL_BOX_INTR,
 				   &data->flags)) {
-		/* Arm the mbox<->alive handshake */
-		clear_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-		set_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags);
-		data->mbox_intr_ts = ktime_get();
-
-		if (data->log_mask & BTINTEL_PCIE_LOG_MBOX)
-			bt_dev_info(data->hdev,
-				    "mbox interrupt received at %lld ns; queuing mbox_work",
-				    ktime_to_ns(data->mbox_intr_ts));
-
 		WRITE_ONCE(data->debug_table_addr, addr);
 		WRITE_ONCE(data->debug_table_size, size);
 		if (!queue_work(data->dump_workqueue,
-				&data->mbox_work)) {
-			clear_bit(BTINTEL_PCIE_MAIL_BOX_INTR, &data->flags);
-			clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags);
-		}
+				&data->mbox_work))
+			clear_bit(BTINTEL_PCIE_MAIL_BOX_INTR,
+				  &data->flags);
 	}
 
 	/* Mailbox is read, ack to FW */
@@ -2420,12 +2400,6 @@ static void btintel_pcie_msix_gp0_handler(struct btintel_pcie_data *data)
 	if (submit_rx) {
 		btintel_pcie_reset_ia(data);
 		btintel_pcie_start_rx(data);
-
-		/* Complete the mbox<->alive handshake */
-		if (test_and_clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags)) {
-			set_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-			wake_up(&data->mbox_parse_wait_q);
-		}
 	}
 
 	if (signal_waitq) {
@@ -4899,6 +4873,8 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	spin_lock_init(&data->irq_lock);
 	spin_lock_init(&data->hci_rx_lock);
 	spin_lock_init(&data->ipc_lock);
+	spin_lock_init(&data->dev_mem_lock);
+	mutex_init(&data->mac_access_lock);
 	mutex_init(&data->rfkill_doorbell_lock);
 
 	init_waitqueue_head(&data->gp0_wait_q);
@@ -4909,8 +4885,6 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 
 	init_waitqueue_head(&data->rfkill_wait_q);
 	data->rfkill_wait_done = false;
-
-	init_waitqueue_head(&data->mbox_parse_wait_q);
 
 	data->workqueue = alloc_ordered_workqueue(KBUILD_MODNAME, WQ_HIGHPRI);
 	if (!data->workqueue)
@@ -5259,13 +5233,6 @@ static int btintel_pcie_set_dxstate(struct btintel_pcie_data *data, u32 dxstate)
 				err = btintel_pcie_start_rx(data);
 				if (err)
 					return err;
-
-				/* Complete the mbox<->alive handshake */
-				if (test_and_clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING,
-						       &data->flags)) {
-					set_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-					wake_up(&data->mbox_parse_wait_q);
-				}
 
 				return 0;
 			}

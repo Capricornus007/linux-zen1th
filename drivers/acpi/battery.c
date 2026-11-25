@@ -106,6 +106,7 @@ struct acpi_battery {
 	struct kfifo acpi_notif_fifo;
 	struct delayed_work acpi_notif_dwork;
 	struct notifier_block pm_nb;
+	struct work_struct pm_work;
 	struct acpi_battery_hooks_list_entry hooks_list_entry;
 	unsigned long flags;
 
@@ -703,11 +704,13 @@ static int acpi_battery_get_state(struct acpi_battery *battery)
 
 	/* For buggy DSDTs that report negative 16-bit values for either
 	 * charging or discharging current and/or report 0 as 65536
-	 * due to bad math.
+	 * due to bad math, or that negate the zero-extended 16-bit value
+	 * (0xfc5a becomes 0xffff03a6), which leaves the magnitude in the
+	 * low 16 bits and makes the rate negative.
 	 */
 	if (battery->power_unit == ACPI_BATTERY_POWER_UNIT_MA &&
 		battery->rate_now != ACPI_BATTERY_VALUE_UNKNOWN &&
-		(s16)(battery->rate_now) < 0) {
+		((s16)(battery->rate_now) < 0 || battery->rate_now < 0)) {
 		battery->rate_now = abs((s16)battery->rate_now);
 		pr_warn_once(FW_BUG "(dis)charge rate invalid.\n");
 	}
@@ -1136,39 +1139,47 @@ static void acpi_battery_notify(acpi_handle handle, u32 event, void *data)
 	pr_err_ratelimited("too many battery notifications within %dms\n", NOTIF_MERGING_MS);
 }
 
+static void acpi_battery_pm_worker(struct work_struct *work)
+{
+	struct acpi_battery *battery = container_of(work, struct acpi_battery,
+						    pm_work);
+
+	guard(mutex)(&battery->update_lock);
+
+	if (!acpi_battery_present(battery))
+		return;
+
+	if (battery->bat) {
+		acpi_battery_refresh(battery);
+	} else {
+		scoped_guard(mutex, &battery->property_lock) {
+			if (acpi_battery_get_info(battery))
+				return;
+		}
+
+		if (sysfs_add_battery(battery))
+			return;
+	}
+
+	scoped_guard(mutex, &battery->property_lock) {
+		acpi_battery_init_alarm(battery);
+		acpi_battery_get_state(battery);
+	}
+}
+
 static int battery_notify(struct notifier_block *nb,
 			  unsigned long mode, void *_unused)
 {
 	struct acpi_battery *battery = container_of(nb, struct acpi_battery,
 						    pm_nb);
 
-	if (mode == PM_POST_SUSPEND || mode == PM_POST_HIBERNATION) {
-		guard(mutex)(&battery->update_lock);
-
-		if (!acpi_battery_present(battery))
-			return 0;
-
-		if (battery->bat) {
-			acpi_battery_refresh(battery);
-		} else {
-			int result;
-
-			scoped_guard(mutex, &battery->property_lock) {
-				result = acpi_battery_get_info(battery);
-				if (result)
-					return result;
-			}
-
-			result = sysfs_add_battery(battery);
-			if (result)
-				return result;
-		}
-
-		scoped_guard(mutex, &battery->property_lock) {
-			acpi_battery_init_alarm(battery);
-			acpi_battery_get_state(battery);
-		}
-	}
+	/*
+	 * Evaluating _BIX, _BTP and _BST takes tens of milliseconds on some
+	 * systems, and the PM notifier chain delays the end of the system
+	 * resume, so do it asynchronously.
+	 */
+	if (mode == PM_POST_SUSPEND || mode == PM_POST_HIBERNATION)
+		queue_work(system_freezable_wq, &battery->pm_work);
 
 	return 0;
 }
@@ -1359,6 +1370,7 @@ static int acpi_battery_probe(struct platform_device *pdev)
 	if (result)
 		return result;
 
+	INIT_WORK(&battery->pm_work, acpi_battery_pm_worker);
 	battery->pm_nb.notifier_call = battery_notify;
 	return register_pm_notifier(&battery->pm_nb);
 }
@@ -1368,6 +1380,7 @@ static void acpi_battery_remove(struct platform_device *pdev)
 	struct acpi_battery *battery = platform_get_drvdata(pdev);
 
 	unregister_pm_notifier(&battery->pm_nb);
+	cancel_work_sync(&battery->pm_work);
 }
 
 /* this is needed to learn about changes made in suspended state */

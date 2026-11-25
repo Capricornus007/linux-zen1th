@@ -1984,15 +1984,7 @@ run_page_cache_worker(struct kfree_rcu_cpu *krcp)
 
 	if (rcu_scheduler_active == RCU_SCHEDULER_RUNNING &&
 			!atomic_xchg(&krcp->work_in_progress, 1)) {
-		/*
-		 * Use the hrtimer to avoid a deadlock with the scheduler
-		 * by waking up the worker directly. queue_delayed_work()
-		 * uses a timer to queue the work, so it's fine.
-		 * But with delay = 0 it queues the work immediately.
-		 * Fall back to the hrtimer in that case.
-		 */
-		if (atomic_read(&krcp->backoff_page_cache_fill) &&
-		    rcu_delay_page_cache_fill_msec) {
+		if (atomic_read(&krcp->backoff_page_cache_fill)) {
 			queue_delayed_work(rcu_reclaim_wq,
 				&krcp->page_cache_work,
 					msecs_to_jiffies(rcu_delay_page_cache_fill_msec));
@@ -2267,12 +2259,12 @@ void __init kvfree_rcu_init(void)
 			WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
 	WARN_ON(!rcu_reclaim_wq);
 
-	/* Clamp it to [0:100] seconds interval. */
-	if (rcu_delay_page_cache_fill_msec < 0 ||
+	/* Clamp it to [1:100000] milliseconds interval. */
+	if (rcu_delay_page_cache_fill_msec < 1 ||
 		rcu_delay_page_cache_fill_msec > 100 * MSEC_PER_SEC) {
 
 		rcu_delay_page_cache_fill_msec =
-			clamp(rcu_delay_page_cache_fill_msec, 0,
+			clamp(rcu_delay_page_cache_fill_msec, 1,
 				(int) (100 * MSEC_PER_SEC));
 
 		pr_info("Adjusting rcutree.rcu_delay_page_cache_fill_msec to %d ms.\n",

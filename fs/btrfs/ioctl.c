@@ -712,10 +712,8 @@ static noinline int create_subvol(const struct mnt_idmap *idmap,
 		btrfs_abort_transaction(trans, ret);
 		goto out;
 	}
-	/* anon_dev is owned by new_root now. */
-	anon_dev = 0;
 	BTRFS_I(new_inode_args.inode)->root = new_root;
-	/* ... and new_root is owned by new_inode_args.inode now. */
+	/* new_root is owned by new_inode_args.inode now. */
 
 	ret = btrfs_record_root_in_trans(trans, new_root);
 	if (unlikely(ret)) {
@@ -868,11 +866,7 @@ static int create_snapshot(struct btrfs_root *root, struct inode *dir,
 
 	d_instantiate(dentry, inode);
 	ret = 0;
-	pending_snapshot->anon_dev = 0;
 fail:
-	/* Prevent double freeing of anon_dev */
-	if (ret && pending_snapshot->snap)
-		pending_snapshot->snap->anon_dev = 0;
 	btrfs_put_root(pending_snapshot->snap);
 	btrfs_block_rsv_release(fs_info, block_rsv, (u64)-1, NULL);
 	if (qgroup_reserved)
@@ -3349,6 +3343,15 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * Copy only what we found instead of the whole data container. If for
+	 * example 'size' is 16M and we found only 1 inode, it's wasteful to
+	 * copy 16M instead of sizeof(*inodes) + 1 * sizeof(u64)).
+	 * For each inode we find we add 3 elements to the inodes->val array:
+	 * inode number, offset and root ID.
+	 */
+	if (size > sizeof(*inodes))
+		size = sizeof(*inodes) + inodes->elem_cnt * sizeof(u64);
 	ret = copy_to_user((void __user *)(unsigned long)loi->inodes, inodes,
 			   size);
 	if (ret)
@@ -4666,7 +4669,8 @@ out:
 	btrfs_inode_unlock(inode, BTRFS_ILOCK_SHARED);
 
 	io_uring_cmd_done(cmd, ret, IO_URING_CMD_TASK_WORK_ISSUE_FLAGS);
-	add_rchar(current, ret);
+	if (ret > 0)
+		add_rchar(current, ret);
 
 	for (index = 0; index < priv->nr_pages; index++)
 		__free_page(priv->pages[index]);

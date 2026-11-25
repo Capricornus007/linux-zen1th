@@ -80,9 +80,6 @@ enum scrub_stripe_flags {
 	/* Set when @mirror_num, @dev, @physical and @logical are set. */
 	SCRUB_STRIPE_FLAG_INITIALIZED,
 
-	/* Set when the read-repair is finished. */
-	SCRUB_STRIPE_FLAG_REPAIR_DONE,
-
 	/*
 	 * Set for data stripes if it's triggered from P/Q stripe.
 	 * During such scrub, we should not report errors in data stripes, nor
@@ -152,8 +149,12 @@ struct scrub_stripe {
 	atomic_t pending_io;
 	/* From btrfs_chunk_map::stripe_len. Should not exceed BTRFS_STRIPE_LEN. */
 	u32 stripe_len;
-	wait_queue_head_t io_wait;
-	wait_queue_head_t repair_wait;
+
+	/* Completed by the last endio when pending_io drops to zero. */
+	struct completion io_done;
+
+	/* Completed when the read-repair is finished. */
+	struct completion repair_done;
 
 	/*
 	 * Indicate the states of the stripe.  Bits are defined in
@@ -358,9 +359,11 @@ static int init_scrub_stripe(struct btrfs_fs_info *fs_info,
 	stripe->stripe_len = BTRFS_STRIPE_LEN;
 	stripe->state = 0;
 
-	init_waitqueue_head(&stripe->io_wait);
-	init_waitqueue_head(&stripe->repair_wait);
+	init_completion(&stripe->repair_done);
+	init_completion(&stripe->io_done);
 	atomic_set(&stripe->pending_io, 0);
+	/* No pending IO by default, thus nothing to wait. */
+	complete_all(&stripe->io_done);
 	spin_lock_init(&stripe->write_error_lock);
 
 	stripe->buffer = kvmalloc(BTRFS_STRIPE_LEN, GFP_KERNEL);
@@ -382,9 +385,25 @@ error:
 	return -ENOMEM;
 }
 
+static void scrub_stripe_get_io(struct scrub_stripe *stripe)
+{
+	/* The first pending IO re-arms the completion. */
+	if (atomic_inc_return(&stripe->pending_io) == 1)
+		reinit_completion(&stripe->io_done);
+}
+
+/* Drop one pending IO, return true if it was the last one. */
+static bool scrub_stripe_put_io(struct scrub_stripe *stripe)
+{
+	if (!atomic_dec_and_test(&stripe->pending_io))
+		return false;
+	complete_all(&stripe->io_done);
+	return true;
+}
+
 static void wait_scrub_stripe_io(struct scrub_stripe *stripe)
 {
-	wait_event(stripe->io_wait, atomic_read(&stripe->pending_io) == 0);
+	wait_for_completion_io(&stripe->io_done);
 }
 
 static void scrub_put_ctx(struct scrub_ctx *sctx);
@@ -892,8 +911,7 @@ static void scrub_repair_read_endio(struct btrfs_bio *bbio)
 
 	scrub_read_endio_common(bbio);
 
-	if (atomic_dec_and_test(&stripe->pending_io))
-		wake_up(&stripe->io_wait);
+	scrub_stripe_put_io(stripe);
 }
 
 static int calc_next_mirror(int mirror, int num_copies)
@@ -942,6 +960,18 @@ static struct btrfs_bio *alloc_scrub_bbio(struct btrfs_fs_info *fs_info,
 	return bbio;
 }
 
+static void scrub_submit_repair_read_bio(struct scrub_stripe *stripe,
+					 struct btrfs_bio *bbio, int mirror,
+					 bool wait)
+{
+	ASSERT(bbio->bio.bi_iter.bi_size);
+
+	scrub_stripe_get_io(stripe);
+	btrfs_submit_bbio(bbio, mirror);
+	if (wait)
+		wait_scrub_stripe_io(stripe);
+}
+
 static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 					    int mirror, int blocksize, bool wait)
 {
@@ -954,15 +984,19 @@ static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 	ASSERT(atomic_read(&stripe->pending_io) == 0,
 	       "atomic_read(&stripe->pending_io)=%d", atomic_read(&stripe->pending_io));
 
+	/*
+	 * Hold an extra ref during submission, so the IO can not be reported as
+	 * finished before all bios are submitted.
+	 * If we wait for every bio, no extra ref as it would block the wait.
+	 */
+	if (!wait)
+		scrub_stripe_get_io(stripe);
+
 	for_each_set_bit(i, &old_error_bitmap, stripe->nr_sectors) {
 		/* The current sector cannot be merged, submit the bio. */
 		if (bbio && ((i > 0 && !test_bit(i - 1, &old_error_bitmap)) ||
 			     bbio->bio.bi_iter.bi_size >= blocksize)) {
-			ASSERT(bbio->bio.bi_iter.bi_size);
-			atomic_inc(&stripe->pending_io);
-			btrfs_submit_bbio(bbio, mirror);
-			if (wait)
-				wait_scrub_stripe_io(stripe);
+			scrub_submit_repair_read_bio(stripe, bbio, mirror, wait);
 			bbio = NULL;
 		}
 
@@ -974,13 +1008,10 @@ static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 
 		scrub_bio_add_sector(bbio, stripe, i);
 	}
-	if (bbio) {
-		ASSERT(bbio->bio.bi_iter.bi_size);
-		atomic_inc(&stripe->pending_io);
-		btrfs_submit_bbio(bbio, mirror);
-		if (wait)
-			wait_scrub_stripe_io(stripe);
-	}
+	if (bbio)
+		scrub_submit_repair_read_bio(stripe, bbio, mirror, wait);
+	if (!wait)
+		scrub_stripe_put_io(stripe);
 }
 
 static void scrub_stripe_report_errors(struct scrub_ctx *sctx,
@@ -1234,8 +1265,7 @@ out:
 	}
 
 	scrub_stripe_report_errors(sctx, stripe, &errors);
-	set_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state);
-	wake_up(&stripe->repair_wait);
+	complete_all(&stripe->repair_done);
 }
 
 static void scrub_read_endio(struct btrfs_bio *bbio)
@@ -1244,8 +1274,7 @@ static void scrub_read_endio(struct btrfs_bio *bbio)
 
 	scrub_read_endio_common(bbio);
 
-	if (atomic_dec_and_test(&stripe->pending_io)) {
-		wake_up(&stripe->io_wait);
+	if (scrub_stripe_put_io(stripe)) {
 		INIT_WORK(&stripe->work, scrub_stripe_read_repair_worker);
 		queue_work(stripe->bg->fs_info->scrub_workers, &stripe->work);
 	}
@@ -1271,8 +1300,7 @@ static void scrub_write_endio(struct btrfs_bio *bbio)
 	}
 	bio_put(&bbio->bio);
 
-	if (atomic_dec_and_test(&stripe->pending_io))
-		wake_up(&stripe->io_wait);
+	scrub_stripe_put_io(stripe);
 }
 
 static void scrub_submit_write_bio(struct scrub_ctx *sctx,
@@ -1285,7 +1313,7 @@ static void scrub_submit_write_bio(struct scrub_ctx *sctx,
 		      stripe->logical;
 
 	fill_writer_pointer_gap(sctx, stripe->physical + bio_off);
-	atomic_inc(&stripe->pending_io);
+	scrub_stripe_get_io(stripe);
 	btrfs_submit_repair_write(bbio, stripe->mirror_num, dev_replace);
 	if (!btrfs_is_zoned(fs_info))
 		return;
@@ -1324,6 +1352,15 @@ static void scrub_write_sectors(struct scrub_ctx *sctx, struct scrub_stripe *str
 	struct btrfs_bio *bbio = NULL;
 	int sector_nr;
 
+	/*
+	 * Hold an extra ref during submission, so the IO can not be reported as
+	 * finished before all bios are submitted.
+	 * For zoned, we wait for every bio, no extra ref as it would block the
+	 * wait.
+	 */
+	if (!btrfs_is_zoned(fs_info))
+		scrub_stripe_get_io(stripe);
+
 	for_each_set_bit(sector_nr, &write_bitmap, stripe->nr_sectors) {
 		/* We should only writeback sectors covered by an extent. */
 		ASSERT(scrub_bitmap_test_bit_has_extent(stripe, sector_nr));
@@ -1342,6 +1379,8 @@ static void scrub_write_sectors(struct scrub_ctx *sctx, struct scrub_stripe *str
 	}
 	if (bbio)
 		scrub_submit_write_bio(sctx, stripe, bbio, dev_replace);
+	if (!btrfs_is_zoned(fs_info))
+		scrub_stripe_put_io(stripe);
 }
 
 /*
@@ -1762,6 +1801,7 @@ static void scrub_reset_stripe(struct scrub_stripe *stripe)
 	stripe->nr_meta_extents = 0;
 	stripe->nr_data_extents = 0;
 	stripe->state = 0;
+	reinit_completion(&stripe->repair_done);
 
 	for (int i = 0; i < stripe->nr_sectors; i++) {
 		stripe->sectors[i].csum = NULL;
@@ -1787,7 +1827,8 @@ static void scrub_submit_extent_sector_read(struct scrub_stripe *stripe)
 	int mirror = stripe->mirror_num;
 	int i;
 
-	atomic_inc(&stripe->pending_io);
+	/* The extra ref is dropped after all bios are submitted. */
+	scrub_stripe_get_io(stripe);
 
 	for_each_set_bit(i, &has_extent, stripe->nr_sectors) {
 		/* We're beyond the chunk boundary, no need to read anymore. */
@@ -1799,7 +1840,7 @@ static void scrub_submit_extent_sector_read(struct scrub_stripe *stripe)
 		    ((i > 0 && !test_bit(i - 1, &has_extent)) ||
 		     bbio->bio.bi_iter.bi_size >= stripe_len)) {
 			ASSERT(bbio->bio.bi_iter.bi_size);
-			atomic_inc(&stripe->pending_io);
+			scrub_stripe_get_io(stripe);
 			btrfs_submit_bbio(bbio, mirror);
 			bbio = NULL;
 		}
@@ -1845,12 +1886,11 @@ static void scrub_submit_extent_sector_read(struct scrub_stripe *stripe)
 
 	if (bbio) {
 		ASSERT(bbio->bio.bi_iter.bi_size);
-		atomic_inc(&stripe->pending_io);
+		scrub_stripe_get_io(stripe);
 		btrfs_submit_bbio(bbio, mirror);
 	}
 
-	if (atomic_dec_and_test(&stripe->pending_io)) {
-		wake_up(&stripe->io_wait);
+	if (scrub_stripe_put_io(stripe)) {
 		INIT_WORK(&stripe->work, scrub_stripe_read_repair_worker);
 		queue_work(stripe->bg->fs_info->scrub_workers, &stripe->work);
 	}
@@ -1878,7 +1918,7 @@ static void scrub_submit_initial_read(struct scrub_ctx *sctx,
 	/* Read the whole range inside the chunk boundary. */
 	for (unsigned int cur = 0; cur < nr_sectors; cur++)
 		scrub_bio_add_sector(bbio, stripe, cur);
-	atomic_inc(&stripe->pending_io);
+	scrub_stripe_get_io(stripe);
 
 	/*
 	 * For dev-replace, either user asks to avoid the source dev, or
@@ -1960,8 +2000,7 @@ static int flush_scrub_stripes(struct scrub_ctx *sctx)
 	for (int i = 0; i < nr_stripes; i++) {
 		stripe = &sctx->stripes[i];
 
-		wait_event(stripe->repair_wait,
-			   test_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state));
+		wait_for_completion(&stripe->repair_done);
 	}
 
 	/* Submit for dev-replace. */
@@ -2236,8 +2275,7 @@ static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 	for (int i = 0; i < data_stripes; i++) {
 		stripe = &sctx->raid56_data_stripes[i];
 
-		wait_event(stripe->repair_wait,
-			   test_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state));
+		wait_for_completion(&stripe->repair_done);
 	}
 	/* For now, no zoned support for RAID56. */
 	ASSERT(!btrfs_is_zoned(sctx->fs_info));

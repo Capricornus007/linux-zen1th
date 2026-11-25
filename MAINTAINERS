@@ -799,8 +799,8 @@ M:	Lorenzo Bianconi <lorenzo@kernel.org>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
 F:	Documentation/devicetree/bindings/phy/airoha,en7581-pcie-phy.yaml
-F:	drivers/phy/phy-airoha-pcie-regs.h
-F:	drivers/phy/phy-airoha-pcie.c
+F:	drivers/phy/airoha/phy-an7581-pcie-regs.h
+F:	drivers/phy/airoha/phy-an7581-pcie.c
 
 AIROHA SOUND DRIVER
 M:	Christian Marangi <ansuelsmth@gmail.com>
@@ -818,6 +818,13 @@ L:	linux-spi@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/spi/airoha,en7581-snand.yaml
 F:	drivers/spi/spi-airoha-snfi.c
+
+AIROHA USB PHY DRIVER
+M:	Christian Marangi <ansuelsmth@gmail.com>
+L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
+S:	Maintained
+F:	Documentation/devicetree/bindings/phy/airoha,an7581-usb-phy.yaml
+F:	drivers/phy/airoha/phy-an7581-usb.c
 
 AIRSPY MEDIA DRIVER
 L:	linux-media@vger.kernel.org
@@ -8308,6 +8315,7 @@ F:	include/linux/power/smartreflex.h
 DRM ACCEL DRIVERS FOR INTEL VPU
 M:	Karol Wachowski <karol.wachowski@linux.intel.com>
 M:	Andrzej Kacprowski <andrzej.kacprowski@linux.intel.com>
+M:	Dawid Osuchowski <dawid.osuchowski@linux.intel.com>
 L:	dri-devel@lists.freedesktop.org
 S:	Supported
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
@@ -10183,13 +10191,18 @@ L:	linux-mm@kvack.org
 S:	Supported
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git for-next/execve
 F:	Documentation/userspace-api/ELF.rst
+F:	arch/*/include/asm/auxvec.h
+F:	arch/*/include/uapi/asm/auxvec.h
 F:	fs/*binfmt_*.c
 F:	fs/Kconfig.binfmt
 F:	fs/exec.c
 F:	fs/tests/binfmt_*_kunit.c
 F:	fs/tests/exec_kunit.c
+F:	include/asm-generic/auxvec.h
+F:	include/linux/auxvec.h
 F:	include/linux/binfmts.h
 F:	include/linux/elf.h
+F:	include/uapi/asm-generic/auxvec.h
 F:	include/uapi/linux/auxvec.h
 F:	include/uapi/linux/binfmts.h
 F:	include/uapi/linux/elf.h
@@ -14505,8 +14518,8 @@ S:	Odd Fixes
 Q:	https://patchwork.kernel.org/project/linux-kbuild/list/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kbuild/linux.git
 F:	Documentation/kbuild/kconfig*
+F:	scripts/config
 F:	scripts/Kconfig.include
-F:	scripts/Kconfig.toolchain
 F:	scripts/kconfig/
 
 KCORE
@@ -14595,6 +14608,7 @@ F:	Documentation/kbuild/
 F:	Makefile
 F:	scripts/*vmlinux*
 F:	scripts/Kbuild*
+F:	scripts/Kconfig.toolchain
 F:	scripts/Makefile*
 F:	scripts/bash-completion/
 F:	scripts/basic/
@@ -19034,6 +19048,7 @@ M:	Dan Callaghan <dan.callaghan@morsemicro.com>
 R:	Arien Judge <arien.judge@morsemicro.com>
 L:	linux-wireless@vger.kernel.org
 S:	Supported
+T:	git https://github.com/MorseMicro/linux-wireless.git
 F:	drivers/net/wireless/morsemicro/
 
 MOST(R) TECHNOLOGY DRIVER
@@ -22794,9 +22809,8 @@ T:	git git://linuxtv.org/media.git
 F:	drivers/media/cec/usb/pulse8/
 
 PURELIFI PLFXLC DRIVER
-M:	Srinivasan Raju <srini.raju@purelifi.com>
 L:	linux-wireless@vger.kernel.org
-S:	Supported
+S:	Orphan
 F:	drivers/net/wireless/purelifi/
 
 PVRUSB2 VIDEO4LINUX DRIVER
@@ -24569,6 +24583,15 @@ L:	linux-crypto@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/crypto/rockchip,rk3288-crypto.yaml
 F:	drivers/crypto/rockchip/
+
+ROCKCHIP EDP TRANSMITTER PHY DRIVER
+M:	Damon Ding <damon.ding@rock-chips.com>
+M:	Heiko Stuebner <heiko@sntech.de>
+L:	linux-rockchip@lists.infradead.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/phy/rockchip,rk3568-edp-phy.yaml
+F:	Documentation/devicetree/bindings/soc/rockchip/rockchip,rk3568-edp-phy-grf.yaml
+F:	drivers/phy/rockchip/phy-rockchip-naneng-edp.c
 
 ROCKCHIP I2S TDM DRIVER
 M:	Nicolas Frattaroli <frattaroli.nicolas@gmail.com>
@@ -31007,6 +31030,12 @@ F:	Documentation/filesystems/xfs/*
 F:	fs/xfs/
 F:	include/uapi/linux/dqblk_xfs.h
 F:	include/uapi/linux/fsmap.h
+
+XIAOMI WMI KEYS DRIVER
+M:	Lucy Wong <lucywong2778@gmail.com>
+L:	platform-driver-x86@vger.kernel.org
+S:	Maintained
+F:	drivers/platform/x86/xiaomi-wmi-keys.c
 
 XILINX AMS DRIVER
 M:	Sai Krishna Potthuri <sai.krishna.potthuri@amd.com>
