@@ -86,6 +86,15 @@ struct scan_control {
 	/* The file folios on the current node are dangerously low */
 	unsigned int file_is_tiny:1;
 
+	/* The anonymous pages on the current node are below vm.anon_min_ratio */
+	unsigned int anon_below_min:1;
+
+	/* The clean file pages on the current node are below vm.clean_low_ratio */
+	unsigned int clean_below_low:1;
+
+	/* The clean file pages on the current node are below vm.clean_min_ratio */
+	unsigned int clean_below_min:1;
+
 	/* Always discard instead of demoting to lower tier memory */
 	unsigned int no_demotion:1;
 

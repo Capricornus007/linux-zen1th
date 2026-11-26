@@ -308,3 +308,4 @@ obj-$(CONFIG_MFD_UPBOARD_FPGA)	+= upboard-fpga.o
 obj-$(CONFIG_MFD_LOONGSON_SE)	+= loongson-se.o
 
 obj-$(CONFIG_MFD_ZTE_ZX297520V3_CRM)	+= zte-zx297520v3-crm.o
+obj-$(CONFIG_MFD_STEAMDECK)	+= steamdeck.o

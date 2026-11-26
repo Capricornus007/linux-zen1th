@@ -1064,6 +1064,12 @@ config LEDS_LTC3208
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called ltc3208.
+config LEDS_STEAMDECK
+	tristate "LED support for Steam Deck"
+	depends on LEDS_CLASS && MFD_STEAMDECK
+	help
+	  This option enabled support for the status LED (next to the
+	  power button) on Steam Deck
 
 source "drivers/leds/blink/Kconfig"
 
