@@ -453,7 +453,11 @@ CONFIG_BHYVE_GUEST=y
 CONFIG_INTEL_TDX_GUEST=y
 CONFIG_CC_HAS_MARCH_NATIVE=y
 CONFIG_RUSTC_HAS_APXF=y
-CONFIG_X86_NATIVE_CPU=y
+# 2026-11-26 上游把 x86-64 CPU 選擇改成 choice（X86_NATIVE_CPU/MK8/…/MZEN3/…/GENERIC_CPU），
+# 並新增 scripts/Makefile.x86 承接 march 映射：MZEN3=y → -march=znver3 + Rust -Ctarget-cpu=znver3。
+# 不再需要改 arch/x86/Makefile 的 hack。znver3 對準用戶機 Zen 3（Ryzen 5 5600U）。
+CONFIG_MZEN3=y
+# CONFIG_X86_NATIVE_CPU is not set
 # CONFIG_GENERIC_CPU is not set
 # CONFIG_MZEN4 is not set
 CONFIG_X86_INTERNODE_CACHE_SHIFT=6

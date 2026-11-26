@@ -51,17 +51,12 @@ prepare() {
     esac
   done < config/keep.fragment
   # znver3（2026-11-09 用戶定案：內核與 lfs-pacman 的 91 包一起對準本機 Zen 3）。
-  # 官方 linux-next arch/x86/Kconfig.cpu 實查：CPU 選項只有 X86_NATIVE_CPU，
-  # 沒有 MZEN3，也沒有 X86_64_VERSION（後者是 CachyOS 補丁；scripts/config 對
-  # 不存在的選項靜默丟行，run 42441427280 已實錘）。唯一真路＝改
-  # arch/x86/Makefile 的 else（非 native）分支，把 generic 的 march/tune 與
-  # rust target-cpu/tune-cpu 換成 znver3。
-  # X86_NATIVE_CPU 必關：CI runner 不是本機，開 native 會編出 runner 專用指令集
-  # （可能是 AVX-512），裝到 Zen 3 上直接非法指令、開不了機。
-  # kernel 自帶 -mno-sse/-mno-mmx/-mno-sse2/-mno-avx/-mno-sse4a，
-  # -march=znver3 只影響調度與整數指令，不會讓內核用到向量暫存器。
-  scripts/config -d MZEN4 -d X86_NATIVE_CPU
-  sed -i 's/-march=x86-64 -mtune=generic/-march=znver3 -mtune=znver3/; s/-Ctarget-cpu=x86-64 /-Ctarget-cpu=znver3 /; s/-Ztune-cpu=generic/-Ztune-cpu=znver3/' arch/x86/Makefile
+  # 2026-11-26 上游重構：x86-64 CPU 選擇變成 choice（X86_NATIVE_CPU/MK8/…/MZEN3/…/GENERIC_CPU），
+  # march 映射移入 scripts/Makefile.x86（MZEN3 → -march=znver3 + Rust -Ctarget-cpu=znver3）。
+  # 舊 hack（改 arch/x86/Makefile 的 else 分支）已無對象，sed 會靜默 no-op，
+  # 且 X86_NATIVE_CPU 變成 choice 成員後 scripts/config -d 壓不住 olddefconfig 的
+  # choice 默認回選（run 45729943004 自檢實錘）。正路＝直接選 MZEN3。
+  scripts/config -d X86_NATIVE_CPU -d MZEN4 -e MZEN3
   # v2.25：套件線開 -O3，內核同步。官方 linux-next init/Kconfig 只有
   # CC_OPTIMIZE_FOR_PERFORMANCE(-O2) 與 CC_OPTIMIZE_FOR_SIZE(-Os)，
   # 沒有 CC_OPTIMIZE_FOR_PERFORMANCE_O3（那是 CachyOS/zen 補丁），
@@ -76,7 +71,7 @@ prepare() {
   local o
   for o in CONFIG_BLK_DEV_NVME=y CONFIG_EXT4_FS=y CONFIG_VFAT_FS=y CONFIG_EXFAT_FS=y \
            CONFIG_BPF_SYSCALL=y CONFIG_DEBUG_INFO_BTF=y "CONFIG_TUN=m" \
-           "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y \
+           CONFIG_MZEN3=y "# CONFIG_X86_NATIVE_CPU is not set" CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y \
            CONFIG_SCHED_BORE=y CONFIG_DRM_AMDGPU=m \
            CONFIG_RTW89_8852AE=m CONFIG_IKCONFIG=y \
            CONFIG_USB_NET_DRIVERS=m CONFIG_USB_USBNET=m CONFIG_USB_NET_CDCETHER=m \
@@ -84,8 +79,8 @@ prepare() {
            "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" CONFIG_FONT_CJK_16x16=y CONFIG_FONT_CJK_32x32=y; do
     grep -qx "$o" .config || { echo "config 自檢失敗：$o"; exit 1; }
   done
-  # znver3 落地自檢（Kconfig 無對應選項，只能查 Makefile 本身）
-  grep -q '\-march=znver3 -mtune=znver3' arch/x86/Makefile || { echo "自檢失敗：arch/x86/Makefile 無 znver3 march"; exit 1; }
+  # znver3 落地自檢（映射在 scripts/Makefile.x86，2026-11-26 上游重構後的新位置）
+  grep -q 'march=znver3' scripts/Makefile.x86 || { echo "自檢失敗：scripts/Makefile.x86 無 znver3 映射"; exit 1; }
 }
 
 build() {
