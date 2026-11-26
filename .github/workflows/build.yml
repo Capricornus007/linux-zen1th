@@ -27,7 +27,9 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch' > /etc/pacman.d/mirrorlist
-          pacman -Syu --noconfirm --needed base-devel git bc flex bison openssl python perl rsync cpio zstd libtraceevent pahole
+          # gh：清理步驟（列舉/刪除 zen1th-repo 舊 asset）在容器內跑，必須存在——
+          # run 45740994081 實錘「gh: command not found」（舊 2>/dev/null 時代靜默吞掉）。
+          pacman -Syu --noconfirm --needed base-devel git bc flex bison openssl python perl rsync cpio zstd libtraceevent pahole github-cli
           useradd -m builder
       - name: 定时触发先查版本（未变则跳过，避免每 3 小时白编 150 分钟）
         id: check
