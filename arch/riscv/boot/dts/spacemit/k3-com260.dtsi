@@ -228,7 +228,7 @@
 		phy1: ethernet-phy@1 {
 			compatible = "ethernet-phy-id001c.c916";
 			reg = <1>;
-			reset-gpios = <&gpio 1 5 GPIO_ACTIVE_LOW>;
+			reset-gpios = <&gpio K3_GPIO(37) GPIO_ACTIVE_LOW>;
 			reset-assert-us = <10000>;
 			reset-deassert-us = <50000>;
 		};
@@ -240,7 +240,7 @@
 	pinctrl-0 = <&mmc1_cfg>;
 	pinctrl-1 = <&mmc1_uhs_cfg>;
 	bus-width = <4>;
-	cd-gpios = <&gpio K3_GPIO(4) GPIO_ACTIVE_HIGH>;
+	cd-gpios = <&gpio K3_GPIO(4) (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
 	no-mmc;
 	no-sdio;
 	disable-wp;

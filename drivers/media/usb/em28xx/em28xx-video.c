@@ -1018,7 +1018,7 @@ static void em28xx_v4l2_media_release(struct em28xx *dev)
 #ifdef CONFIG_MEDIA_CONTROLLER
 	int i;
 
-	if (dev->board.decoder == EM28XX_BUILTIN) {
+	if (dev->board.decoder == EM28XX_BUILTIN && dev->v4l2->decoder) {
 		media_device_unregister_entity(dev->v4l2->decoder);
 		kfree(dev->v4l2->decoder);
 		dev->v4l2->decoder = NULL;
@@ -1170,6 +1170,9 @@ static void em28xx_v4l2_create_entities(struct em28xx *dev)
 		v4l2->decoder_pads[EM2828X_PAD_VID_OUT].sig_type = PAD_SIGNAL_DV;
 
 		v4l2->decoder = kzalloc_obj(*v4l2->decoder);
+		if (!v4l2->decoder)
+			return;
+
 		v4l2->decoder->name = "em2828x_builtin";
 		v4l2->decoder->function = MEDIA_ENT_F_ATV_DECODER;
 
@@ -2507,7 +2510,6 @@ static int em28xx_v4l2_close(struct file *filp)
 	struct video_device   *vdev = video_devdata(filp);
 	struct em28xx         *dev  = video_drvdata(filp);
 	struct em28xx_v4l2    *v4l2 = dev->v4l2;
-	struct usb_device *udev = interface_to_usbdev(dev->intf);
 	int              err;
 	bool last_user;
 
@@ -2516,6 +2518,8 @@ static int em28xx_v4l2_close(struct file *filp)
 	_vb2_fop_release(filp, vdev->queue->lock);
 
 	if (last_user) {
+		struct usb_device *udev;
+
 		/* No sense to try to write to the device */
 		if (dev->disconnected)
 			goto exit;
@@ -2529,6 +2533,7 @@ static int em28xx_v4l2_close(struct file *filp)
 		/* set alternate 0 */
 		dev->alt = 0;
 		em28xx_videodbg("setting alternate 0\n");
+		udev = interface_to_usbdev(dev->intf);
 		err = usb_set_interface(udev, 0, 0);
 		if (err < 0) {
 			dev_err(&dev->intf->dev,

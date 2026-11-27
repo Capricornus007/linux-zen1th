@@ -2322,7 +2322,6 @@ void scx_resched_curr_deferred(struct rq *rq);
 u64 __scx_bpf_now(struct rq *rq);
 void schedule_dsq_reenq(struct scx_sched *sch, struct scx_dispatch_q *dsq,
 			u64 reenq_flags, struct rq *locked_rq);
-void scx_wait_dispatching(struct task_struct *p);
 int __scx_init_task(struct scx_sched *sch, struct task_struct *p,
 		    struct cgroup *cgrp, bool fork);
 void scx_enable_task(struct scx_sched *sch, struct task_struct *p);
@@ -2674,6 +2673,8 @@ static inline bool scx_task_on_sched(struct scx_sched *sch,
 	return rcu_access_pointer(p->scx.sched) == sch;
 }
 
+static struct bpf_struct_ops bpf_sched_ext_ops, bpf_sched_ext_ops_cid;
+
 /**
  * scx_prog_sched - Find scx_sched associated with a BPF prog
  * @aux: aux passed in from BPF to a kfunc
@@ -2687,7 +2688,8 @@ static inline struct scx_sched *scx_prog_sched(const struct bpf_prog_aux *aux)
 	struct sched_ext_ops *ops;
 	struct scx_sched *sch, *root;
 
-	ops = bpf_prog_get_assoc_struct_ops(aux);
+	ops = bpf_prog_get_assoc_struct_ops(aux, &bpf_sched_ext_ops) ?:
+	      bpf_prog_get_assoc_struct_ops(aux, &bpf_sched_ext_ops_cid);
 	if (likely(ops)) {
 		sch = rcu_dereference_all(ops->priv);
 		if (sch && unlikely(READ_ONCE(sch->dead)))

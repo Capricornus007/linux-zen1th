@@ -131,8 +131,8 @@ STATIC_IFN_KUNIT int amdgpu_dm_wb_connector_get_modes(struct drm_connector *conn
 }
 EXPORT_IF_KUNIT(amdgpu_dm_wb_connector_get_modes);
 
-STATIC_IFN_KUNIT int amdgpu_dm_wb_prepare_job(struct drm_writeback_connector *wb_connector,
-			       struct drm_writeback_job *job)
+STATIC_IFN_KUNIT int amdgpu_dm_wb_prepare_job(struct drm_connector *wb_connector,
+					      struct drm_writeback_job *job)
 {
 	struct amdgpu_framebuffer *afb;
 	struct drm_gem_object *obj;
@@ -196,7 +196,7 @@ error_unlock:
 }
 EXPORT_IF_KUNIT(amdgpu_dm_wb_prepare_job);
 
-STATIC_IFN_KUNIT void amdgpu_dm_wb_cleanup_job(struct drm_writeback_connector *connector,
+STATIC_IFN_KUNIT void amdgpu_dm_wb_cleanup_job(struct drm_connector *connector,
 				struct drm_writeback_job *job)
 {
 	struct amdgpu_bo *rbo;
@@ -260,7 +260,7 @@ int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 	if (res)
 		return res;
 
-	drm_connector_helper_add(&wbcon->base.base, &amdgpu_dm_wb_conn_helper_funcs);
+	drm_connector_helper_add(&wbcon->base, &amdgpu_dm_wb_conn_helper_funcs);
 
 	res = drm_writeback_connector_init(&dm->adev->ddev, &wbcon->base,
 					   &amdgpu_dm_wb_connector_funcs,
@@ -275,7 +275,7 @@ int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 	 * Some of the properties below require access to state, like bpc.
 	 * Allocate some default initial connector state with our reset helper.
 	 */
-	connector = &wbcon->base.base;
+	connector = &wbcon->base;
 	if (connector->funcs->atomic_create_state) {
 		struct drm_connector_state *conn_state;
 

@@ -1477,6 +1477,17 @@ static void alc245_fixup_minisforum_jack_detect(struct hda_codec *codec,
 		alc_update_coef_idx(codec, 0x4a, BIT(15), 0);
 }
 
+static void alc245_fixup_acer_hp_jd_reset(struct hda_codec *codec,
+					  const struct hda_fixup *fix,
+					  int action)
+{
+	if (action == HDA_FIXUP_ACT_INIT) {
+		/* Pulse Reset HP JD */
+		alc_update_coef_idx(codec, 0x4a, BIT(15), BIT(15));
+		alc_update_coef_idx(codec, 0x4a, BIT(15), 0);
+	}
+}
+
 /* turn on/off mic-mute LED per capture hook via VREF change */
 static int vref_micmute_led_set(struct led_classdev *led_cdev,
 				enum led_brightness brightness)
@@ -4633,6 +4644,7 @@ enum {
 	ALC233_FIXUP_LENOVO_GPIO2_MIC_HOTKEY,
 	ALC245_FIXUP_BASS_HP_DAC,
 	ALC245_FIXUP_ACER_MICMUTE_LED,
+	ALC245_FIXUP_ACER_HP_JD_RESET,
 	ALC245_FIXUP_CS35L41_I2C_2_MUTE_LED,
 	ALC245_FIXUP_CS35L41_I2C_2_MUTE_MICMUTE_LED,
 	ALC256_FIXUP_HONOR_MRB_XXX_M1020_AUDIO,
@@ -7471,6 +7483,12 @@ static const struct hda_fixup alc269_fixups[] = {
 		.chained = true,
 		.chain_id = ALC2XX_FIXUP_HEADSET_MIC,
 	},
+	[ALC245_FIXUP_ACER_HP_JD_RESET] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc245_fixup_acer_hp_jd_reset,
+		.chained = true,
+		.chain_id = ALC245_FIXUP_ACER_MICMUTE_LED,
+	},
 	[ALC245_FIXUP_CS35L41_I2C_2_MUTE_LED] = {
 		.type = HDA_FIXUP_FUNC,
 		.v.func = alc245_fixup_hp_mute_led_coefbit,
@@ -7659,7 +7677,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1025, 0x166c, "Acer Predator PH16-71", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x1679, "Acer Nitro 16 AN16-41", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x169a, "Acer Swift SFG16", ALC256_FIXUP_ACER_SFG16_MICMUTE_LED),
-	SND_PCI_QUIRK(0x1025, 0x170f, "Acer Predator PHN16-71", ALC245_FIXUP_ACER_MICMUTE_LED),
+	SND_PCI_QUIRK(0x1025, 0x170f, "Acer Predator PHN16-71", ALC245_FIXUP_ACER_HP_JD_RESET),
 	SND_PCI_QUIRK(0x1025, 0x171e, "Acer Nitro ANV15-51", ALC245_FIXUP_ACER_MICMUTE_LED),
 	SND_PCI_QUIRK(0x1025, 0x172c, "Acer Nitro ANV16-41", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x1731, "Acer Predator PHN16-72", ALC245_FIXUP_ACER_MICMUTE_LED),
@@ -8905,6 +8923,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x2782, 0xa128, "Positivo N15RPE-S", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
 	SND_PCI_QUIRK(0x2782, 0xa212, "Lunnen Ground 14", ALC269VC_FIXUP_LUNNEN_GROUND_14),
 	SND_PCI_QUIRK(0x2782, 0xa248, "COLORFUL L1 Plus", ALC233_FIXUP_MEDION_MTL_SPK),
+	SND_PCI_QUIRK(0x2782, 0xa24a, "Infinix BL51A7H", ALC233_FIXUP_MEDION_MTL_SPK),
 	SND_PCI_QUIRK(0x7017, 0x2014, "Star Labs StarFighter", ALC233_FIXUP_STARLABS_STARFIGHTER),
 	SND_PCI_QUIRK(0x8086, 0x2073, "Intel NUC 8 Hades Canyon",
 		      ALC700_FIXUP_INTEL_HADES_CANYON),

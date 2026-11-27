@@ -176,6 +176,8 @@ enum surface_pixel_format {
 	SURFACE_PIXEL_FORMAT_GRPH_ARGB8888,
 	/*32 bpp swaped*/
 	SURFACE_PIXEL_FORMAT_GRPH_ABGR8888,
+	/*32 bpp, alpha in LSB*/
+	SURFACE_PIXEL_FORMAT_GRPH_RGBA8888,
 
 	SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010,
 	/*swaped*/
@@ -1205,12 +1207,6 @@ struct mcif_buf_params {
 	unsigned int		swlock;
 	unsigned int		p_vmid;
 	uint8_t				tmz_id;
-};
-
-struct fva_adj {
-	unsigned int pixel_clock_100hz;
-	unsigned int max_pixel_clock_100hz;
-	unsigned int fva_factor;
 };
 
 enum symclk_state {

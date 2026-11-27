@@ -8038,6 +8038,10 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, struct bpf_reg_
 		return check_mem_region_access(env, reg, argno, 0, access_size,
 					       reg->map_ptr->key_size, false);
 	case PTR_TO_MAP_VALUE:
+		if (reg->map_ptr->map_type == BPF_MAP_TYPE_INSN_ARRAY && !env->allow_ptr_leaks) {
+			verbose(env, "%s leaks addr from insn_array\n", reg_arg_name(env, argno));
+			return -EACCES;
+		}
 		if (check_map_access_type(env, reg, 0, access_size, access_type))
 			return -EACCES;
 		return check_map_access(env, reg, argno, 0, access_size,
@@ -12578,6 +12582,10 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 		    env->prog->expected_attach_type == BPF_CGROUP_GETSOCKOPT)
 			break;
 
+		/* It is what the previous struct bpf_tcp_ops returned, any int */
+		if (prog_type == BPF_PROG_TYPE_STRUCT_OPS)
+			break;
+
 		if (prog_type == BPF_PROG_TYPE_LSM &&
 		    env->prog->expected_attach_type == BPF_LSM_CGROUP) {
 			if (!env->prog->aux->attach_func_proto->type)
@@ -15835,12 +15843,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		for (i = 0; i < CALLER_SAVED_REGS; i++)
 			bpf_mark_reg_not_init(env, &regs[caller_saved[i]]);
 
+		/* The kfunc returns int, the upper half of r0 is not known */
 		mark_reg_unknown(env, regs, BPF_REG_0);
-		err = __mark_reg_s32_range(env, regs, BPF_REG_0, -MAX_ERRNO, -1);
-		if (err) {
-			verbose(env, "failed to mark s32 range for retval in forked state for lock\n");
-			return err;
-		}
+		reg_set_srange32(&regs[BPF_REG_0], -MAX_ERRNO, -1);
+		reg_bounds_sync(&regs[BPF_REG_0]);
 	} else if (!insn->off && insn->imm == special_kfunc_list[KF___bpf_trap]) {
 		verbose(env, "unexpected __bpf_trap() due to uninitialized variable?\n");
 		return -EFAULT;
@@ -16144,6 +16150,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				return err;
 		} else if (btf_type_is_void(ptr_type)) {
 			/* kfunc returning 'void *' is equivalent to returning scalar */
+			if (!env->allow_ptr_leaks) {
+				verbose(env,
+					"%s is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
+					func_name);
+				return -EPERM;
+			}
 			mark_reg_unknown(env, regs, BPF_REG_0);
 		} else if (!__btf_type_is_struct(ptr_type)) {
 			if (!meta.ret_mem.found) {
@@ -19929,7 +19941,8 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		 * matches the operator's return type and is in its unmodified
 		 * form. A scalar zero (i.e., a null pointer) is also allowed.
 		 */
-		reg_type = reg->btf ? btf_type_by_id(reg->btf, reg->btf_id) : NULL;
+		reg_type = base_type(reg->type) == PTR_TO_BTF_ID ?
+			   btf_type_by_id(reg->btf, reg->btf_id) : NULL;
 		ret_type = btf_type_resolve_ptr(prog->aux->attach_btf,
 						prog->aux->attach_func_proto->type,
 						NULL);
@@ -22119,6 +22132,12 @@ static int __check_pseudo_btf_id(struct bpf_verifier_env *env,
 		}
 	}
 
+	if (!percpu && !env->allow_ptr_leaks) {
+		verbose(env, "access to '%s' is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
+			sym_name);
+		return -EPERM;
+	}
+
 	type = t->type;
 	t = btf_type_skip_modifiers(btf, type, NULL);
 	if (percpu) {
@@ -22162,6 +22181,11 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 		btf = btf_get_by_fd(btf_fd);
 		if (IS_ERR(btf)) {
 			verbose(env, "invalid module BTF object FD specified.\n");
+			return -EINVAL;
+		}
+		if (!btf_is_kernel(btf)) {
+			verbose(env, "BTF fd for ksym is not a kernel BTF\n");
+			btf_put(btf);
 			return -EINVAL;
 		}
 	} else {
@@ -24345,6 +24369,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	}
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
+		enum bpf_cgroup_storage_type stype;
 		bool tgt_changes_pkt_data;
 		bool tgt_might_sleep;
 		bool tgt_can_unwind;
@@ -24410,6 +24435,16 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 					"Extension programs should be JITed\n");
 				return -EINVAL;
 			}
+			/* bpf_get_local_storage() returns the storage of the target */
+			for_each_cgroup_storage_type(stype) {
+				struct bpf_map *storage = prog->aux->cgroup_storage[stype];
+
+				if (storage && storage != aux->cgroup_storage[stype]) {
+					bpf_log(log,
+						"Extension program has another cgroup storage than original\n");
+					return -EINVAL;
+				}
+			}
 			/*
 			 * How much of the buffer of the tracepoint is used
 			 * is checked for the program that is attached to it.
@@ -24474,16 +24509,14 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Cannot recursively attach\n");
 			return -EINVAL;
 		}
-		if (tgt_prog->type == BPF_PROG_TYPE_TRACING &&
-		    prog_extension &&
-		    (tgt_prog->expected_attach_type == BPF_TRACE_FENTRY ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FSESSION ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI)) {
-			/* Program extensions can extend all program types
-			 * except fentry/fexit. The reason is the following.
+		if (prog_extension &&
+		    (tgt_prog->type == BPF_PROG_TYPE_TRACING ||
+		     tgt_prog->type == BPF_PROG_TYPE_LSM ||
+		     tgt_prog->type == BPF_PROG_TYPE_STRUCT_OPS)) {
+			/*
+			 * These types are checked against the BTF of their hook,
+			 * and an extension has the BTF of its target instead.
+			 * There is one more reason for fentry/fexit.
 			 * The fentry/fexit programs are used for performance
 			 * analysis, stats and can be attached to any program
 			 * type. When extension program is replacing XDP function
@@ -24496,7 +24529,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			 * beyond reasonable stack size. Hence extending fentry
 			 * is not allowed.
 			 */
-			bpf_log(log, "Cannot extend fentry/fexit/fsession\n");
+			bpf_log(log, "Cannot extend tracing, LSM and struct_ops programs\n");
 			return -EINVAL;
 		}
 	} else {
@@ -24857,10 +24890,13 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		prog->aux->saved_dst_attach_type = tgt_prog->expected_attach_type;
 	}
 
-	if (prog->expected_attach_type == BPF_TRACE_RAW_TP) {
+	/* An extension has expected_attach_type of its target, it can be any value */
+	if (prog->type != BPF_PROG_TYPE_EXT &&
+	    prog->expected_attach_type == BPF_TRACE_RAW_TP) {
 		prog->aux->attach_btf_trace = true;
 		return 0;
-	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
+	} else if (prog->type != BPF_PROG_TYPE_EXT &&
+		   prog->expected_attach_type == BPF_TRACE_ITER) {
 		return bpf_iter_prog_supported(prog);
 	}
 
@@ -25482,6 +25518,13 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 		}
 		if (!map->excl_prog_sha) {
 			verbose(env, "signed program metadata map '%s' must be exclusive\n",
+				map->name);
+			err = -EPERM;
+			goto out;
+		}
+		/* The freeze is not final for it, see bpf_map_mmap() */
+		if ((map->map_flags & BPF_F_MMAPABLE) && !(map->map_flags & BPF_F_RDONLY_PROG)) {
+			verbose(env, "signed program metadata map '%s' must not be mmapable\n",
 				map->name);
 			err = -EPERM;
 			goto out;

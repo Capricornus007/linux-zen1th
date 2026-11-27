@@ -36,7 +36,7 @@
  */
 #include "link_hdmi_frl.h"
 #include "link_ddc.h"
-#include "link/link_dpms.h"
+#include "link/link_dpms_v1.h"
 #include "link/link_validation.h"
 #include "resource.h"
 #include "dccg.h"
@@ -1040,7 +1040,7 @@ void hdmi_frl_set_preferred_link_settings(struct dc *dc,
 	link_stream->link->frl_verified_link_cap = *link_setting;
 
 	while (link_stat != LINK_RESULT_SUCCESS && link_stat != LINK_RESULT_NO_TIMEOUT) {
-		link_set_dpms_off(pipe);
+		link->dc->link_srv->set_dpms_off(pipe);
 		/* For DCN3.0, can also have 4:1 combine mode.
 		 * TODO: Add function get_odm_combine_mode that has different
 		 *       implementation for DCN2/DCN3AG and DCN3.0
@@ -1172,6 +1172,10 @@ static void update_borrow_mode_from_dsc_padding(struct dsc_padding_params *dsc_p
 	uint32_t h_active = timing->h_addressable + timing->h_border_left + timing->h_border_right;
 	uint32_t h_blank = timing->h_total - h_active;
 	struct frl_borrow_params *borrow_params = &frl_link_settings->borrow_params;
+
+	if (dsc_padding_params->dsc_hactive_padding == 0 &&
+	    dsc_padding_params->dsc_htotal_padding == 0)
+		return;
 
 	borrow_params->borrow_mode = frl_modify_borrow_mode_for_dsc_padding(timing->pix_clk_100hz,
 		h_active,

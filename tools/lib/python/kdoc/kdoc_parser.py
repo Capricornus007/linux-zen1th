@@ -217,6 +217,7 @@ class KernelEntry:
         self.prototype = ""
 
         self.warnings = []
+        self.stored = False
 
         self.parameterlist = []
         self.parameterdescs = {}
@@ -414,6 +415,7 @@ class KernelDoc:
                         self.entry.parametertypes,
                         self.entry.parameterdesc_start_lines)
         self.entries.append(item)
+        self.entry.stored = True
 
         self.config.log.debug("Output: %s:%s = %s", dtype, name, pformat(args))
 
@@ -437,7 +439,7 @@ class KernelDoc:
               during the output step of the code, depending on the
               selected symbols.
         """
-        if self.entry and self.entry not in self.entries:
+        if self.entry and not self.entry.stored:
             for log_msg in self.entry.warnings:
                 self.config.warning(log_msg)
 

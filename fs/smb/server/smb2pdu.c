@@ -13,12 +13,14 @@
 #include <linux/statfs.h>
 #include <linux/ethtool.h>
 #include <linux/falloc.h>
+#include <linux/highmem.h>
 #include <linux/mount.h>
 #include <linux/filelock.h>
 #include <linux/fileattr.h>
 #include <linux/math.h>
 #include <linux/timekeeping.h>
 #include <linux/unaligned.h>
+#include <linux/vmalloc.h>
 
 #include "glob.h"
 #include "../common/smbfsctl.h"
@@ -5245,47 +5247,30 @@ resolve_path:
 					struct smb_fattr fattr;
 					struct smb_ntsd *pntsd;
 					int pntsd_size;
-					size_t scratch_len;
 
 					rc = ksmbd_acls_fattr(&fattr, idmap, inode);
 					if (rc)
 						goto err_out;
 
-					scratch_len = smb_acl_sec_desc_scratch_len(&fattr,
-							NULL, 0,
-							OWNER_SECINFO | GROUP_SECINFO |
-							DACL_SECINFO);
-					if (!scratch_len || scratch_len == SIZE_MAX) {
-						rc = -EFBIG;
-						posix_acl_release(fattr.cf_acls);
-						posix_acl_release(fattr.cf_dacls);
-						goto err_out;
-					}
-
-					pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
-					if (!pntsd) {
-						rc = -ENOMEM;
-						posix_acl_release(fattr.cf_acls);
-						posix_acl_release(fattr.cf_dacls);
-						goto err_out;
-					}
-
 					rc = build_sec_desc(idmap,
-							    pntsd, NULL, 0,
+							    &pntsd, NULL,
 							    OWNER_SECINFO |
 							    GROUP_SECINFO |
 							    DACL_SECINFO,
 							    &pntsd_size, &fattr);
 					posix_acl_release(fattr.cf_acls);
 					posix_acl_release(fattr.cf_dacls);
-					if (rc) {
-						kvfree(pntsd);
-						goto err_out;
-					}
-
-					ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
-							       pntsd, pntsd_size);
+					/*
+					 * A DACL too large for an SD is not
+					 * stored. The file keeps the POSIX
+					 * ACL it inherited.
+					 */
+					if (!rc)
+						ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
+								       pntsd, pntsd_size);
 					kvfree(pntsd);
+					if (rc && rc != -E2BIG)
+						goto err_out;
 				}
 			}
 		}
@@ -8437,14 +8422,14 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 {
 	struct ksmbd_file *fp;
 	const struct mnt_idmap *idmap;
-	struct smb_ntsd *pntsd = NULL, *ppntsd = NULL;
+	struct smb_ntsd *pntsd = NULL;
+	struct ksmbd_sd *ppntsd = NULL;
 	struct smb_fattr fattr = {{0}};
 	struct inode *inode;
 	__u32 secdesclen = 0;
 	unsigned int id = KSMBD_NO_FID, pid = KSMBD_NO_FID;
 	int addition_info = le32_to_cpu(req->AdditionalInformation);
-	int rc = 0, ppntsd_size = 0, max_len;
-	size_t scratch_len = 0;
+	int rc = 0, max_len;
 
 	if (addition_info & ~(OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO |
 			      PROTECTED_DACL_SECINFO |
@@ -8496,11 +8481,13 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 
 	if (test_share_config_flag(work->tcon->share_conf,
 				   KSMBD_SHARE_FLAG_ACL_XATTR)) {
-		ppntsd_size = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
-						     fp->filp->f_path.dentry,
-						     &ppntsd);
-		if (ppntsd_size < 0 && !smb_no_stored_sd(ppntsd_size)) {
-			rc = ppntsd_size == -ENOMEM ? -ENOMEM : -EIO;
+		rc = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
+					    fp->filp->f_path.dentry, &ppntsd);
+		if (rc && !smb_no_stored_sd(rc)) {
+			if (rc == -EBADMSG)
+				rsp->hdr.Status = STATUS_INVALID_SECURITY_DESCR;
+			else if (rc != -ENOMEM)
+				rc = -EIO;
 			goto release_acl;
 		}
 	}
@@ -8514,32 +8501,18 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 		goto release_acl;
 	}
 
-	scratch_len = smb_acl_sec_desc_scratch_len(&fattr, ppntsd,
-			ppntsd_size, addition_info);
-	if (!scratch_len || scratch_len > SIZE_MAX - 7) {
-		rc = -EFBIG;
-		goto release_acl;
-	}
-
-	/* A compound response pads the descriptor to 8 bytes in this buffer */
-	scratch_len = ALIGN(scratch_len, 8);
-	pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
-	if (!pntsd) {
-		rc = -ENOMEM;
-		goto release_acl;
-	}
-
-	rc = build_sec_desc(idmap, pntsd, ppntsd, ppntsd_size,
-			addition_info, &secdesclen, &fattr);
+	rc = build_sec_desc(idmap, &pntsd, ppntsd, addition_info, &secdesclen,
+			    &fattr);
+	/* The DACL is too large for an SD */
+	if (rc == -E2BIG)
+		rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 
 release_acl:
 	posix_acl_release(fattr.cf_acls);
 	posix_acl_release(fattr.cf_dacls);
-	kfree(ppntsd);
+	kvfree(ppntsd);
 	ksmbd_fd_put(work, fp);
 
-	if (!rc && ALIGN(secdesclen, 8) > scratch_len)
-		rc = -EFBIG;
 	if (rc)
 		goto err_out;
 
@@ -8550,9 +8523,22 @@ release_acl:
 	if (rc)
 		goto err_out;
 
+	/* A compound response pads the descriptor to 8 bytes in this buffer */
+	if (!IS_ALIGNED(secdesclen, 8)) {
+		void *padded = kvrealloc(pntsd, ALIGN(secdesclen, 8),
+					 KSMBD_DEFAULT_GFP);
+
+		if (!padded) {
+			rc = -ENOMEM;
+			goto err_out;
+		}
+		memset(padded + secdesclen, 0, ALIGN(secdesclen, 8) - secdesclen);
+		pntsd = padded;
+	}
+
 	rc = ksmbd_iov_pin_rsp_read(work, (void *)rsp,
 			offsetof(struct smb2_query_info_rsp, Buffer),
-			pntsd, secdesclen);
+			pntsd, secdesclen, NULL);
 err_out:
 	if (rc) {
 		rsp->OutputBufferLength = 0;
@@ -9657,7 +9643,7 @@ static noinline int smb2_read_pipe(struct ksmbd_work *work)
 
 	err = ksmbd_iov_pin_rsp_read(work, rsp,
 				     offsetof(struct smb2_read_rsp, Buffer),
-				     aux_payload_buf, nbytes);
+				     aux_payload_buf, nbytes, NULL);
 	if (err) {
 		kvfree(aux_payload_buf);
 		goto out_put;
@@ -9981,6 +9967,53 @@ static ssize_t smb2_read_rdma(struct ksmbd_work *work,
 	return length;
 }
 
+static bool smb2_read_splice_eligible(struct ksmbd_work *work,
+				      const struct smb2_read_req *req)
+{
+	return !work->next_smb2_rcv_hdr_off && !req->hdr.NextCommand &&
+		!work->encrypted && !work->sess->sign && !work->conn->sign &&
+		!(req->hdr.Flags & SMB2_FLAGS_SIGNED) &&
+		!(req->Flags & SMB2_READFLAG_REQUEST_COMPRESSED) &&
+		req->Channel == SMB2_CHANNEL_NONE &&
+		ksmbd_transport_is_tcp(work->conn->transport);
+}
+
+static void *smb2_alloc_read_buf(size_t size, bool splice, struct folio **folio)
+{
+	if (splice) {
+		unsigned int order = get_order(size);
+		void *buf;
+
+		if (order <= MAX_PAGE_ORDER) {
+			*folio = folio_alloc(GFP_NOWAIT | __GFP_NORETRY, order);
+			if (*folio)
+				return folio_address(*folio);
+		}
+
+		buf = __vmalloc(size, GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN);
+		if (buf)
+			return buf;
+	}
+	return kvmalloc(size, KSMBD_DEFAULT_GFP);
+}
+
+static void smb2_set_splice_payload(struct ksmbd_work *work, void *buf,
+				    size_t length, struct folio *folio)
+{
+	if (length < PAGE_SIZE)
+		return;
+	if (folio) {
+		/* A short READ should not pin a mostly unused folio in TCP. */
+		if (get_order(length) < folio_order(folio))
+			return;
+	} else {
+		if (!is_vmalloc_addr(buf))
+			return;
+		flush_kernel_vmap_range(buf, length);
+	}
+	work->splice_read = true;
+}
+
 /**
  * smb2_read() - handler for smb2 read from file
  * @work:	smb work containing read command buffer
@@ -9999,9 +10032,11 @@ int smb2_read(struct ksmbd_work *work)
 	int err = 0;
 	int rdma_transform_len = 0;
 	bool is_rdma_channel = false, async_interim = false;
+	bool splice;
 	unsigned int max_read_size = conn->vals->max_read_size;
 	unsigned int id = KSMBD_NO_FID, pid = KSMBD_NO_FID;
-	void *aux_payload_buf;
+	void *aux_payload_buf = NULL;
+	struct folio *folio = NULL;
 
 	ksmbd_debug(SMB, "Received smb2 read request\n");
 
@@ -10114,7 +10149,9 @@ int smb2_read(struct ksmbd_work *work)
 	ksmbd_debug(SMB, "filename %pD, offset %lld, len %zu\n",
 		    fp->filp, offset, length);
 
-	aux_payload_buf = kvmalloc(ALIGN(length, 8), KSMBD_DEFAULT_GFP);
+	splice = length >= PAGE_SIZE && !ksmbd_stream_fd(fp) &&
+		 smb2_read_splice_eligible(work, req);
+	aux_payload_buf = smb2_alloc_read_buf(ALIGN(length, 8), splice, &folio);
 	if (!aux_payload_buf) {
 		err = -ENOMEM;
 		goto out;
@@ -10122,7 +10159,6 @@ int smb2_read(struct ksmbd_work *work)
 
 	nbytes = ksmbd_vfs_read(work, fp, length, &offset, aux_payload_buf);
 	if (nbytes < 0) {
-		kvfree(aux_payload_buf);
 		err = nbytes;
 		goto out;
 	}
@@ -10137,7 +10173,7 @@ int smb2_read(struct ksmbd_work *work)
 		memset(aux_payload_buf + nbytes, 0, ALIGN(nbytes, 8) - nbytes);
 
 	if ((nbytes == 0 && length != 0) || nbytes < mincount) {
-		kvfree(aux_payload_buf);
+		ksmbd_free_read_buf(aux_payload_buf, folio);
 		rsp->hdr.Status = STATUS_END_OF_FILE;
 		smb2_set_err_rsp(work);
 		if (async_interim)
@@ -10155,7 +10191,6 @@ int smb2_read(struct ksmbd_work *work)
 							 aux_payload_buf,
 							 nbytes);
 		if (rdma_transform_len < 0) {
-			kvfree(aux_payload_buf);
 			err = rdma_transform_len;
 			goto out;
 		}
@@ -10191,11 +10226,11 @@ int smb2_read(struct ksmbd_work *work)
 	err = ksmbd_iov_pin_rsp_read(work, (void *)rsp,
 				     offsetof(struct smb2_read_rsp, Buffer) +
 				     rdma_transform_len,
-				     aux_payload_buf, nbytes);
-	if (err) {
-		kvfree(aux_payload_buf);
+				     aux_payload_buf, nbytes, folio);
+	if (err)
 		goto out;
-	}
+	if (splice)
+		smb2_set_splice_payload(work, aux_payload_buf, nbytes, folio);
 	if (async_interim)
 		release_async_work(work);
 	/*
@@ -10211,6 +10246,7 @@ int smb2_read(struct ksmbd_work *work)
 	return 0;
 
 out:
+	ksmbd_free_read_buf(aux_payload_buf, folio);
 	if (async_interim)
 		release_async_work(work);
 	if (err) {

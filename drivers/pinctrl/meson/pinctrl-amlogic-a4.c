@@ -1135,8 +1135,7 @@ static int aml_pctl_probe_dt(struct platform_device *pdev,
 
 	info->banks = devm_kzalloc_objs(dev, *info->banks, info->nbanks);
 
-	if (IS_ERR_OR_NULL(info->functions) || IS_ERR_OR_NULL(info->groups) ||
-	    IS_ERR_OR_NULL(info->banks))
+	if (!info->functions || !info->groups || !info->banks)
 		return -ENOMEM;
 
 	info->data = (struct aml_pctl_data *)of_device_get_match_data(dev);

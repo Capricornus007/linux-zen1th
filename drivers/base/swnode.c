@@ -1049,9 +1049,8 @@ EXPORT_SYMBOL_GPL(fwnode_remove_software_node);
  * @dev: The device the software node is meant for.
  * @node: The software node.
  *
- * This function will make @node the secondary firmware node pointer of @dev. If
- * @dev has no primary node, then @node will become the primary node. The
- * function will register @node automatically if it wasn't already registered.
+ * Register @node if it was not already registered and make it the secondary
+ * firmware node of @dev.
  */
 int device_add_software_node(struct device *dev, const struct software_node *node)
 {
@@ -1092,7 +1091,8 @@ EXPORT_SYMBOL_GPL(device_add_software_node);
  * device_remove_software_node - Remove device's software node
  * @dev: The device with the software node.
  *
- * This function will unregister the software node of @dev.
+ * Remove a software node added by device_add_software_node() and
+ * deregister it if this is the last reference.
  */
 void device_remove_software_node(struct device *dev)
 {
@@ -1100,6 +1100,9 @@ void device_remove_software_node(struct device *dev)
 
 	swnode = dev_to_swnode(dev);
 	if (!swnode)
+		return;
+
+	if (fwnode_is_primary(&swnode->fwnode))
 		return;
 
 	if (device_is_registered(dev))
@@ -1160,8 +1163,8 @@ void software_node_notify(struct device *dev)
 		return;
 
 	/*
-	 * When the software node is the device's secondary firmware node,
-	 * the core only records the owning device on the primary fwnode
+	 * When a device has both a primary and a secondary firmware node the
+	 * core only records the owning device in the primary node
 	 * (see device_add()). fw_devlink resolves a supplier device through
 	 * fwnode->dev, so without this a consumer referencing the software
 	 * node could never find the supplier device and would defer forever.
@@ -1196,9 +1199,8 @@ void software_node_notify_remove(struct device *dev)
 	sysfs_remove_link(&dev->kobj, "software_node");
 
 	/*
-	 * Drop the device pointer mirrored onto a secondary software node in
-	 * software_node_notify(). For a primary software node the core owns
-	 * fwnode->dev and clears it in device_del().
+	 * Clear any device pointer set in a secondary software node in
+	 * software_node_notify().
 	 */
 	if (!device_match_fwnode(dev, &swnode->fwnode) && swnode->fwnode.dev == dev)
 		swnode->fwnode.dev = NULL;

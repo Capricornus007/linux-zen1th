@@ -784,7 +784,7 @@ static int hw_params_state_check(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_STATE_OPEN:
 	case SNDRV_PCM_STATE_SETUP:
 	case SNDRV_PCM_STATE_PREPARED:
-		if (check_mmap && !is_oss_stream(substream) &&
+		if (check_mmap &&
 		    atomic_read(&substream->mmap_count))
 			return -EBADFD;
 		return 0;
@@ -3411,6 +3411,9 @@ static int snd_pcm_xferi_frames_ioctl(struct snd_pcm_substream *substream,
 	struct snd_xferi xferi;
 	snd_pcm_sframes_t result;
 
+	SND_PCM_BUFFER_ACQUIRE(substream->runtime, lock);
+	if (SND_PCM_BUFFER_ACQUIRE_ERR(lock))
+		return -EBUSY;
 	if (snd_pcm_get_state(substream) == SNDRV_PCM_STATE_OPEN)
 		return -EBADFD;
 	if (put_user(0, &_xferi->result))

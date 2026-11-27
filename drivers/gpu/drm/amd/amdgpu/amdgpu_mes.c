@@ -133,6 +133,8 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 {
 	int i, r, num_pipes, num_queues = 0;
 	int num_xcc = adev->gfx.xcc_mask ? NUM_XCC(adev->gfx.xcc_mask) : 1;
+	int max_sdma_pipes = amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(13, 0, 0) ?
+		AMDGPU_MES_MAX_SDMA_PIPES : 2;
 	u32 gfx_hqd_mask = amdgpu_mes_get_hqd_mask(adev->gfx.me.num_pipe_per_me,
 				adev->gfx.me.num_queue_per_pipe,
 				adev->gfx.disable_kq ? 0 : adev->gfx.num_gfx_rings);
@@ -190,15 +192,12 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 
 	num_pipes = adev->sdma.num_inst_per_xcc ?
 		adev->sdma.num_inst_per_xcc : adev->sdma.num_instances;
-	if (num_pipes > AMDGPU_MES_MAX_SDMA_PIPES)
+	if (num_pipes > max_sdma_pipes)
 		dev_warn(adev->dev, "more SDMA pipes than supported by MES! (%d vs %d)\n",
-			 num_pipes, AMDGPU_MES_MAX_SDMA_PIPES);
+			 num_pipes, max_sdma_pipes);
 
-	for (i = 0; i < AMDGPU_MES_MAX_SDMA_PIPES; i++) {
-		if (i >= num_pipes)
-			break;
+	for (i = 0; i < min(num_pipes, max_sdma_pipes); i++)
 		adev->mes.sdma_hqd_mask[i] = 0xfc;
-	}
 
 	dev_info(adev->dev,
 			 "MES: vmid_uq_mask_mmhub 0x%08x, vmid_uq_mask_gfxhub 0x%08x\n",
@@ -763,6 +762,7 @@ int amdgpu_mes_hdp_flush(struct amdgpu_device *adev)
 
 int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				uint64_t process_context_addr,
+				uint32_t process_context_array_index,
 				uint32_t spi_gdbg_per_vmid_cntl,
 				const uint32_t *tcp_watch_cntl,
 				const uint64_t *watch_addresses,
@@ -782,6 +782,8 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.u32all = flags;
 
 	/* use amdgpu mes_flush_shader_debugger instead */
@@ -811,6 +813,7 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 
 int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 				     uint64_t process_context_addr,
+				     uint32_t process_context_array_index,
 				     uint32_t xcc_id)
 {
 	struct mes_misc_op_input op_input = {0};
@@ -825,6 +828,8 @@ int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.process_ctx_flush = true;
 
 	amdgpu_mes_lock(&adev->mes);
@@ -1068,6 +1073,10 @@ int amdgpu_mes_rs64mem_setup_bitmaps(struct amdgpu_mes *mes)
 	struct amdgpu_device *adev = container_of(mes, struct amdgpu_device, mes);
 
 	if (!mes->use_rs64mem || !mes->ctx_array_size_cpu_ptr)
+		return 0;
+
+	/* Keep the slots live processes and queues hold across MES re-init. */
+	if (mes->proc_ctx_bitmap && mes->gang_ctx_bitmap)
 		return 0;
 
 	/*

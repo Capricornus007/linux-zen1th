@@ -12,6 +12,7 @@
 #include "libbfd.h"
 #include "map.h"
 #include "maps.h"
+#include "namespaces.h"
 #include "symbol.h"
 #include "symsrc.h"
 #include "machine.h"
@@ -460,7 +461,7 @@ static bool get_ifunc_name(Elf *elf, struct dso *dso, GElf_Ehdr *ehdr,
 
 	addr -= phdr.p_vaddr - phdr.p_offset;
 
-	sym = dso__find_symbol_nocache(dso, addr);
+	sym = symbols__find(dso__symbols(dso), addr);
 
 	/* Expecting the address to be an IFUNC or IFUNC alias */
 	if (!sym || sym->start != addr ||
@@ -742,7 +743,7 @@ int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss)
 	 * by symbols__fixup_end() to overlap .plt. Truncate it before adding
 	 * a symbol for .plt header.
 	 */
-	f = dso__find_symbol_nocache(dso, shdr_plt.sh_offset);
+	f = symbols__find(dso__symbols(dso), shdr_plt.sh_offset);
 	if (f && f->start < shdr_plt.sh_offset && f->end > shdr_plt.sh_offset)
 		f->end = shdr_plt.sh_offset;
 
@@ -1396,6 +1397,7 @@ int symsrc__init(struct symsrc *ss, struct dso *dso, const char *name,
 	ss->fd     = fd;
 	ss->ehdr   = ehdr;
 	ss->type   = type;
+	ss->chroot = false;
 
 	return 0;
 
@@ -1631,6 +1633,155 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 	return 0;
 }
 
+static char *read_name_at(int fd, u64 off)
+{
+	char small[256], *buf = NULL, *tmp;
+	size_t size = sizeof(small);
+	ssize_t n = pread(fd, small, size, off);
+
+	if (n > 0 && memchr(small, '\0', n))
+		return strdup(small);
+
+	while (n == (ssize_t)size) {
+		size *= 2;
+		tmp = realloc(buf, size);
+		if (!tmp)
+			break;
+		buf = tmp;
+		n = pread(fd, buf, size, off);
+		if (n > 0 && memchr(buf, '\0', n))
+			return buf;
+	}
+	free(buf);
+	return NULL;
+}
+
+static int read_symbol_names(struct dso *dso, int fd, struct symbol **syms, size_t nr)
+{
+	int err = 0;
+
+	for (size_t i = 0; i < nr; i++) {
+		char *name, *demangled;
+
+		if (!symbol__needs_lazy_name(syms[i]))
+			continue;
+		name = read_name_at(fd, syms[i]->name_off);
+		if (!name) {
+			pr_debug("%s: cannot read the symbol name at %#" PRIx64 "\n",
+				 dso__long_name(dso), syms[i]->name_off);
+			err = -1;
+			continue;
+		}
+		demangled = dso__demangle_sym(dso, /*kmodule=*/0, name);
+		if (demangled) {
+			free(name);
+			name = demangled;
+		}
+		symbol__set_loaded_name(syms[i], name);
+	}
+	return err;
+}
+
+/*
+ * A name that cannot be read becomes "[unknown]". The file name is built
+ * again and opened in perf's mount namespace, so lazy names must only be
+ * created for a symbol table file that perf opened there by that name.
+ */
+void dso__load_symbol_names(struct dso *dso, struct symbol **syms, size_t nr)
+{
+	char *filename;
+	bool decomp;
+	int fd = -1;
+	size_t i;
+
+	/* Another thread can load the names before the caller takes the lock. */
+	for (i = 0; i < nr && !symbol__needs_lazy_name(syms[i]); i++)
+		;
+	if (i == nr)
+		return;
+
+	filename = dso__get_filename(dso, "", &decomp, dso__symtab_type(dso));
+	if (filename)
+		fd = open(filename, O_RDONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		read_symbol_names(dso, fd, syms, nr);
+		close(fd);
+	} else {
+		pr_debug("%s: cannot open the symbol table file\n", dso__long_name(dso));
+	}
+	if (filename)
+		dso__put_filename(dso, filename, decomp);
+
+	for (i = 0; i < nr; i++) {
+		if (symbol__needs_lazy_name(syms[i]))
+			symbol__set_unknown_name(syms[i]);
+	}
+}
+
+/*
+ * symbols__fixup_duplicate() compares the names of symbols at the same
+ * address only when their size, type and binding tie. Load those names.
+ */
+static int dso__load_alias_names(struct dso *dso, int fd)
+{
+	struct symbols *symbols = dso__symbols(dso);
+	unsigned int i, end, a, b;
+	int err = 0;
+
+	symbols__sort_read_lock(symbols);
+	for (i = 0; i < symbols->cnt && !err; i = end) {
+		for (end = i + 1; end < symbols->cnt &&
+		     symbols->symbols[end]->start == symbols->symbols[i]->start; end++)
+			;
+		for (a = i; a < end && !err; a++) {
+			for (b = a + 1; b < end && !err; b++) {
+				struct symbol *pair[2] = {
+					symbols->symbols[a], symbols->symbols[b]
+				};
+
+				if (symbol__choice_needs_names(pair[0], pair[1]))
+					err = read_symbol_names(dso, fd, pair, 2);
+			}
+		}
+	}
+	up_read(&symbols->lock);
+	return err;
+}
+
+/* PLT synthesis names IRELATIVE slots after IFUNC symbols. Load those names. */
+static int dso__load_ifunc_names(struct dso *dso, int fd)
+{
+	struct symbols *symbols = dso__symbols(dso);
+	int err = 0;
+
+	symbols__sort_read_lock(symbols);
+	for (unsigned int i = 0; i < symbols->cnt && !err; i++) {
+		struct symbol *pos = symbols->symbols[i];
+
+		if (symbol__type(pos) == STT_GNU_IFUNC || symbol__ifunc_alias(pos))
+			err = read_symbol_names(dso, fd, &pos, 1);
+	}
+	up_read(&symbols->lock);
+	return err;
+}
+
+/*
+ * dso__load_symbol_names() builds the file name again and opens it in perf's
+ * mount namespace. At load time, perf opened the same file there if it is in
+ * the build-id cache or if the DSO needs no namespace switch, unless perf
+ * found it through the chroot fallback.
+ */
+static bool dso__can_reopen_symtab(struct dso *dso, struct symsrc *ss)
+{
+	struct nsinfo *nsi = dso__nsinfo(dso);
+
+	if (ss->chroot)
+		return false;
+	return (ss->type == DSO_BINARY_TYPE__BUILD_ID_CACHE ||
+		ss->type == DSO_BINARY_TYPE__BUILD_ID_CACHE_DEBUGINFO ||
+		!nsi || !nsinfo__need_setns(nsi));
+}
+
 static int
 dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 		       struct symsrc *runtime_ss, int kmodule, int dynsym)
@@ -1648,11 +1799,23 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 	GElf_Sym sym;
 	Elf_Scn *sec, *sec_strndx;
 	Elf *elf;
-	int nr = 0;
+	int nr = 0, nr_lazy = 0;
 	bool remap_kernel = false, adjust_kernel_syms = false;
 	u64 max_text_sh_offset = 0;
 	struct elf_phdr_cache phdr_cache = {};
 	struct elf_sec_cache_entry sec_cache[ELF_SEC_CACHE_SIZE];
+	/*
+	 * Names are read later from the file of dso__symtab_type(). The
+	 * .gnu_debugdata symbol table is a temporary file.
+	 */
+	bool lazy_allowed = (symbol_conf.lazy_load_symbols && !dso__kernel(dso) &&
+			     dso__lazy_names(dso) != DSO_LAZY_NAMES__EAGER &&
+			     syms_ss->type == dso__symtab_type(dso) &&
+			     syms_ss->type != DSO_BINARY_TYPE__GNU_DEBUGDATA &&
+			     dso__can_reopen_symtab(dso, syms_ss) &&
+			     !runtime_ss->opdsec);
+	bool lazy_names = false;
+	GElf_Shdr strshdr;
 
 	if (kmap && !kmaps)
 		return -1;
@@ -1687,6 +1850,11 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 	symstrs = elf_getdata(sec, NULL);
 	if (symstrs == NULL)
 		goto out_elf_end;
+
+	/* Names are read with pread(), so the string table must be stored as is. */
+	if (lazy_allowed && gelf_getshdr(sec, &strshdr) &&
+	    strshdr.sh_type == SHT_STRTAB && !(strshdr.sh_flags & SHF_COMPRESSED))
+		lazy_names = true;
 
 	sec_strndx = elf_getscn(runtime_ss->elf, runtime_ss->ehdr.e_shstrndx);
 	if (sec_strndx == NULL)
@@ -1926,16 +2094,24 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 			}
 		}
 
-		if (!elf_name)
-			elf_name = elf_sym__name(&sym, symstrs);
-		demangled = dso__demangle_sym(dso, kmodule, elf_name);
-		if (demangled != NULL)
-			elf_name = demangled;
+		if (lazy_names && sym.st_name < strshdr.sh_size) {
+			f = symbol__new_lazy(sym.st_value, sym.st_size,
+					     GELF_ST_BIND(sym.st_info),
+					     GELF_ST_TYPE(sym.st_info),
+					     strshdr.sh_offset + sym.st_name);
+			nr_lazy++;
+		} else {
+			if (!elf_name)
+				elf_name = elf_sym__name(&sym, symstrs);
+			demangled = dso__demangle_sym(dso, kmodule, elf_name);
+			if (demangled != NULL)
+				elf_name = demangled;
 
-		f = symbol__new(sym.st_value, sym.st_size,
-				GELF_ST_BIND(sym.st_info),
-				GELF_ST_TYPE(sym.st_info), elf_name);
-		free(demangled);
+			f = symbol__new(sym.st_value, sym.st_size,
+					GELF_ST_BIND(sym.st_info),
+					GELF_ST_TYPE(sym.st_info), elf_name);
+			free(demangled);
+		}
 		if (!f)
 			goto out_elf_end;
 
@@ -1947,10 +2123,19 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 	}
 	dso__put(curr_dso);
 	elf_phdr_cache__exit(&phdr_cache);
+
+	if (nr_lazy) {
+		dso__set_lazy_names(dso, DSO_LAZY_NAMES__PENDING);
+		pr_debug2("%s: %d %s symbols with lazy names\n", dso__long_name(dso),
+			  nr_lazy, dynsym ? ".dynsym" : ".symtab");
+	}
 	return nr;
 out_elf_end:
 	dso__put(curr_dso);
 	elf_phdr_cache__exit(&phdr_cache);
+	/* The symbols inserted before the error stay in the DSO. */
+	if (nr_lazy)
+		dso__set_lazy_names(dso, DSO_LAZY_NAMES__PENDING);
 	return -1;
 }
 
@@ -2017,9 +2202,16 @@ int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 	if (nr > 0) {
 		struct kmap *kmap = dso__kernel(dso) ? map__kmap(map) : NULL;
 		struct maps *kmaps = kmap ? map__kmaps(map) : NULL;
+		/* Lazy names are only in syms_ss. */
+		bool lazy = (dso__lazy_names(dso) == DSO_LAZY_NAMES__PENDING);
 
 		symbols__fixup_end(dso__symbols(dso), false);
+		if (lazy && !symbol_conf.allow_aliases &&
+		    dso__load_alias_names(dso, syms_ss->fd))
+			return -1;
 		symbols__fixup_duplicate(dso__symbols(dso));
+		if (lazy && dso__load_ifunc_names(dso, syms_ss->fd))
+			return -1;
 		if (kmap) {
 			/*
 			 * We need to fixup this here too because we create new

@@ -38,6 +38,7 @@
 #include "amdgpu_dm_hdcp.h"
 #include "amdgpu_dm_mst_types.h"
 #include "amdgpu_dm_kunit_test_helpers.h"
+#include "mod_power.h"
 
 /* Tests for simple DM callbacks */
 
@@ -1292,6 +1293,11 @@ static void dm_test_crtc_with_stream(struct kunit *test,
 	adev->mode_info.num_crtc = 1;
 	adev->mode_info.crtcs[0] = acrtc;
 	acrtc->dm_irq_params.stream = stream;
+
+	/* dm_vblank_get_counter()/dm_crtc_get_scanoutpos() take this unconditionally
+	 * once a stream is set.
+	 */
+	spin_lock_init(&adev->dm.sw_counter_lock);
 }
 
 /**
@@ -3985,6 +3991,74 @@ static void dm_test_init_power_module_alloc_failure(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, adev->dm.power_module);
 }
 
+/* Tests for amdgpu_dm_fill_power_nits_range() */
+
+/**
+ * dm_test_fill_power_nits_range_aux - Test AUX passes the panel nits range
+ * @test: The KUnit test context
+ *
+ * The power module sends max_brightness_millinits to DMUB, which scales the
+ * VESA AUX level with it, so it must be the panel range and not 270 nits
+ */
+static void dm_test_fill_power_nits_range_aux(struct kunit *test)
+{
+	struct amdgpu_dm_backlight_caps caps = {
+		.aux_support = true,
+		.aux_min_input_signal = 1,
+		.aux_max_input_signal = 500,
+	};
+	struct mod_power_init_params init_data;
+
+	memset(&init_data, 0xff, sizeof(init_data));
+	amdgpu_dm_fill_power_nits_range(&caps, &init_data);
+
+	KUNIT_EXPECT_TRUE(test, init_data.use_nits_based_brightness);
+	KUNIT_EXPECT_EQ(test, init_data.panel_min_millinits, 1000U);
+	KUNIT_EXPECT_EQ(test, init_data.panel_max_millinits, 500000U);
+}
+
+/**
+ * dm_test_fill_power_nits_range_aux_bad_range - Test a bad AUX range keeps the default
+ * @test: The KUnit test context
+ */
+static void dm_test_fill_power_nits_range_aux_bad_range(struct kunit *test)
+{
+	struct amdgpu_dm_backlight_caps caps = {
+		.aux_support = true,
+		.aux_min_input_signal = 500,
+		.aux_max_input_signal = 500,
+	};
+	struct mod_power_init_params init_data;
+
+	memset(&init_data, 0xff, sizeof(init_data));
+	amdgpu_dm_fill_power_nits_range(&caps, &init_data);
+
+	KUNIT_EXPECT_FALSE(test, init_data.use_nits_based_brightness);
+	KUNIT_EXPECT_EQ(test, init_data.panel_min_millinits, 0U);
+	KUNIT_EXPECT_EQ(test, init_data.panel_max_millinits, 0U);
+}
+
+/**
+ * dm_test_fill_power_nits_range_pwm - Test PWM keeps the default nits range
+ * @test: The KUnit test context
+ */
+static void dm_test_fill_power_nits_range_pwm(struct kunit *test)
+{
+	struct amdgpu_dm_backlight_caps caps = {
+		.aux_support = false,
+		.aux_min_input_signal = 1,
+		.aux_max_input_signal = 500,
+	};
+	struct mod_power_init_params init_data;
+
+	memset(&init_data, 0xff, sizeof(init_data));
+	amdgpu_dm_fill_power_nits_range(&caps, &init_data);
+
+	KUNIT_EXPECT_FALSE(test, init_data.use_nits_based_brightness);
+	KUNIT_EXPECT_EQ(test, init_data.panel_min_millinits, 0U);
+	KUNIT_EXPECT_EQ(test, init_data.panel_max_millinits, 0U);
+}
+
 /* Tests for fill_dc_plane_info_and_addr() */
 
 struct dm_test_plane_info_ctx {
@@ -4780,7 +4854,7 @@ static void dm_test_set_writeback_no_pipe(struct kunit *test)
 	conn_state->writeback_job = job;
 	crtc_state->stream = dm_kunit_alloc_stream(test, NULL);
 
-	dm_set_writeback(&adev->dm, crtc_state, &wb_conn->base.base, conn_state);
+	dm_set_writeback(&adev->dm, crtc_state, &wb_conn->base, conn_state);
 
 	KUNIT_EXPECT_NULL(test, acrtc->wb_conn);
 	KUNIT_EXPECT_FALSE(test, acrtc->wb_pending);
@@ -5579,6 +5653,10 @@ static struct kunit_case amdgpu_dm_tests[] = {
 	/* amdgpu_dm_init_power_module */
 	KUNIT_CASE(dm_test_init_power_module_no_edp),
 	KUNIT_CASE(dm_test_init_power_module_alloc_failure),
+	/* amdgpu_dm_fill_power_nits_range */
+	KUNIT_CASE(dm_test_fill_power_nits_range_aux),
+	KUNIT_CASE(dm_test_fill_power_nits_range_aux_bad_range),
+	KUNIT_CASE(dm_test_fill_power_nits_range_pwm),
 	/* fill_dc_plane_info_and_addr */
 	KUNIT_CASE(dm_test_plane_info_graphics_formats),
 	KUNIT_CASE(dm_test_plane_info_video_formats),

@@ -10,12 +10,13 @@
 #include "state_facts/state_facts.h"
 
 /*
- * DCN_DECL_NON_SEAMLESS_COMMIT for one virtual stream without planes.
- * The new state has no stream, or one stream with no plane; the current
- * state has no stream, or one stream with one or two planes, one per DPP
- * pipe. Planes are added later by DCN_DECL_SEAMLESS_UPDATE, not by this
- * commit. The stream is in ODM bypass, 2:1 or 3:1, with one OPP head
- * and at most one DPP pipe per slice.
+ * DCN_DECL_NON_SEAMLESS_COMMIT for virtual streams. It disables every
+ * current stream, each with one or two planes, one per DPP pipe, then
+ * enables every new stream, each with no plane. A kept stream keeps its
+ * OTG, and the commit runs the seamless update's front end for it when its
+ * pipes or planes change. Planes are added later by
+ * DCN_DECL_SEAMLESS_UPDATE. Each stream is in ODM bypass, 2:1 or 3:1, with
+ * one OPP head and at most one DPP pipe per slice.
  *
  * The sequence follows legacy_commit_state_hw on dcn401: the same leaf
  * calls in the same order, including the calls DC1 repeats. Everything is
@@ -32,78 +33,44 @@ static bool check_stream_config_update(const struct dc *dc,
 	return !dc->ctx->cp_psp.funcs.update_stream_config;
 }
 
-static bool check_plane_count(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
+/* A current stream has its planes, one per DPP pipe. */
+static bool check_current_planes(const struct dc *dc,
+		const struct dc_state *state, unsigned int i)
 {
-	const struct dc_state *state = dcn401_checked_state(current_state,
-			new_state);
-	unsigned int planes = state->stream_status[0].plane_count;
+	unsigned int planes = state->stream_status[i].plane_count;
 	struct dc_state_facts facts;
 
-	/*
-	 * The current state carries the removed planes, one per DPP pipe.
-	 * The new state has none.
-	 */
 	(void)dc;
-	if (!current_state)
-		return !planes;
 	dc_state_facts_derive(state, &facts);
 	return planes && planes ==
-			facts.global.blend_tree[0].dpp_pipe_count;
-}
-
-static bool check_pipe_plane(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
-{
-	/*
-	 * The current state carries the removed planes. The new state has
-	 * none.
-	 */
-	struct dc_state_facts facts;
-	const struct dc_state *state = current_state ? current_state : new_state;
-
-	(void)dc;
-	dc_state_facts_derive(state, &facts);
-	if (!facts.pipe.count)
-		return false;
-	if (current_state)
-		return dc_state_facts_all_pipe(&facts, 0, DC_TRAIT_MATCH(0, 0),
-				DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE, 0));
-	return !dc_state_facts_any_pipe(&facts, 0,
+			facts.global.blend_tree[i].dpp_pipe_count &&
+			dc_state_facts_all_pipe(&facts, (uint8_t)i,
+			DC_TRAIT_MATCH_ANY,
 			DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE, 0));
 }
 
 static bool check_plane_blocks(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
+		const struct dc_state *state, unsigned int i)
 {
 	struct dc_state_facts facts;
 
-	(void)new_state;
 	(void)dc;
-	if (!current_state)
-		return true;
-	dc_state_facts_derive(current_state, &facts);
-	return facts.pipe.count &&
-			dc_state_facts_all_pipe(&facts, 0, DC_TRAIT_MATCH(0, 0),
+	dc_state_facts_derive(state, &facts);
+	return dc_state_facts_all_pipe(&facts, (uint8_t)i,
+			DC_TRAIT_MATCH_ANY,
 			DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE_RESOURCES, 0));
 }
 
 /* Each OPP's tree holds exactly the removed MPCCs of its slice, in order. */
 static bool check_mpcc_tree(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
+		const struct dc_state *state, unsigned int i)
 {
-	const struct pipe_ctx *opp_head = dcn401_checked_otg_master(dc,
-			current_state, new_state);
+	const struct pipe_ctx *opp_head = dcn401_otg_master(state,
+			state->streams[i]);
 	const struct pipe_ctx *pipe;
 	const struct mpcc *mpcc;
 
-	if (!current_state)
-		return true;
-	if (!opp_head || !dc->res_pool || !dc->res_pool->mpc)
+	if (!dc->res_pool || !dc->res_pool->mpc)
 		return false;
 	for (; opp_head; opp_head = opp_head->next_odm_pipe) {
 		mpcc = opp_head->stream_res.opp->mpc_tree_params.opp_list;
@@ -120,52 +87,93 @@ static bool check_mpcc_tree(const struct dc *dc,
 	return true;
 }
 
-static enum bls_builder_result dcn401_check_commit_state_support(
-		const struct dc *dc, const struct dc_state *current_state,
-		const struct dc_state *new_state)
+/* A new stream has no plane. */
+static bool check_new_no_planes(const struct dc *dc,
+		const struct dc_state *state, unsigned int i)
 {
-	enum bls_builder_result result;
+	struct dc_state_facts facts;
 
-	result = dcn401_check_stream_support(dc, current_state, new_state);
-	if (result != BLS_BUILD_SUCCESS ||
-			!dcn401_checked_state(current_state,
-			new_state)->stream_count)
-		return result;
+	(void)dc;
+	dc_state_facts_derive(state, &facts);
+	return !state->stream_status[i].plane_count &&
+			!dc_state_facts_any_pipe(&facts, (uint8_t)i,
+			DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE, 0));
+}
 
-	CHECK_CONDITION(plane_count, "plane count does not match the state");
-	CHECK_CONDITION(pipe_plane, "pipe plane does not match the state");
-	CHECK_RESOURCE(plane_blocks, "plane is missing hubp or dpp");
-	CHECK_CONDITION(mpcc_tree, "opp tree does not match the pipes");
+static enum bls_builder_result dcn401_check_current_stream(
+		const struct dc *dc, const struct dc_state *state,
+		unsigned int i)
+{
+	CHECK_STREAM_CONDITION(current_planes,
+			"plane count does not match the pipes");
+	CHECK_STREAM_RESOURCE(plane_blocks, "plane is missing hubp or dpp");
+	CHECK_STREAM_CONDITION(mpcc_tree, "opp tree does not match the pipes");
 	return BLS_BUILD_SUCCESS;
 }
 
-static bool check_stream_not_kept(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
+static enum bls_builder_result dcn401_check_new_stream(
+		const struct dc *dc, const struct dc_state *state,
+		unsigned int i)
 {
-	(void)dc;
-	/* A stream is either removed or added, never kept. */
-	return !current_state->stream_count || !new_state->stream_count;
+	CHECK_STREAM_CONDITION(new_no_planes, "new stream has a plane");
+	return BLS_BUILD_SUCCESS;
 }
 
+static enum bls_builder_result dcn401_check_commit_state_support(
+		const struct dc *dc, const struct dc_state *current_state,
+		const struct dc_state *new_state, bool is_current)
+{
+	const struct dc_state *state = is_current ? current_state : new_state;
+	enum bls_builder_result result;
+	unsigned int i;
+
+	result = dcn401_check_stream_support(dc, is_current ? state : NULL,
+			is_current ? NULL : state);
+	for (i = 0; result == BLS_BUILD_SUCCESS && i < state->stream_count;
+			i++) {
+		if (dcn401_stream_kept(dc, current_state, new_state,
+				state->streams[i]))
+			continue;
+		result = is_current ?
+				dcn401_check_current_stream(dc, state, i) :
+				dcn401_check_new_stream(dc, state, i);
+	}
+	return result;
+}
+
+/*
+ * The current streams are disabled before the new ones are enabled, so a
+ * new stream's link may be active when it carries a current stream.
+ */
 static bool check_link_not_active(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
 {
+	const struct dc_link *link;
+	int i, j;
+
 	(void)dc;
-	(void)current_state;
-	if (!new_state->stream_count)
-		return true;
-	return !new_state->streams[0]->link->link_status.link_active;
+	for (i = 0; i < new_state->stream_count; i++) {
+		link = new_state->streams[i]->link;
+		if (!link->link_status.link_active)
+			continue;
+		for (j = 0; j < current_state->stream_count; j++)
+			if (current_state->streams[j]->link == link)
+				break;
+		if (j == current_state->stream_count)
+			return false;
+	}
+	return true;
 }
 
 static enum bls_builder_result dcn401_check_non_seamless_commit_support(
 		const struct dc *dc, const struct dc_state *current_state,
-		const struct dc_state *new_state)
+		const struct dc_state *new_state,
+		const struct dc_state_update_flags *update_flags)
 {
 	enum bls_builder_result result;
 
-	if (!dc || !current_state || !new_state)
+	if (!dc || !current_state || !new_state || !update_flags)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
 
 	result = dcn401_check_dc_support(dc);
@@ -173,15 +181,16 @@ static enum bls_builder_result dcn401_check_non_seamless_commit_support(
 		return result;
 	CHECK_CONDITION(stream_config_update, "stream config update is set");
 
-	result = dcn401_check_commit_state_support(dc, current_state, NULL);
+	result = dcn401_check_commit_state_support(dc, current_state,
+			new_state, true);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
-	result = dcn401_check_commit_state_support(dc, NULL, new_state);
+	result = dcn401_check_commit_state_support(dc, current_state,
+			new_state, false);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
-	CHECK_CONDITION(stream_not_kept, "stream is kept across the commit");
-	CHECK_CONDITION(link_not_active, "link is already active");
+	CHECK_CONDITION(link_not_active, "link is active on another stream");
 	return BLS_BUILD_SUCCESS;
 }
 
@@ -202,7 +211,7 @@ prepare_bandwidth[] = {
 };
 
 /*
- * Net effect: disable the stream of the current state.
+ * Net effect: disable each stream of the current state.
  * - disable_dangling_plane: disconnect the MPCC under the OTG lock, then
  *   dcn20_disable_plane.
  * - link_set_dpms_off for the virtual signal: dcn401_disable_stream, then
@@ -221,30 +230,8 @@ static const struct dcn401_commit_step blank[] = {
 	{ .func = OPP_SET_DISP_PATTERN_GENERATOR },
 };
 
-static const struct dcn401_commit_step disconnect[] = {
-	{ .func = HUBP_PROGRAM_DET_SEGMENTS },
-	{ .func = MPC_REMOVE_MPCC },
-};
-
 static const struct dcn401_commit_step unlock[] = {
 	{ .func = TG_LOCK, .meta.tg_lock.lock = false },
-};
-
-static const struct dcn401_commit_step power_down[] = {
-	{ .func = MPC_ASSERT_IDLE_MPCC },
-	{ .func = HUBP_SET_BLANK },
-	{ .func = HUBP_UPDATE_MALL_SEL },
-	{ .func = HUBP_SET_FLIP_CONTROL_GSL },
-	{ .func = HUBP_CLK_CNTL },
-	{ .func = DPP_DPPCLK_CONTROL },
-	{ .func = DC_IP_REQUEST_STATUS, .meta.skip_if.no_ip_request = true },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
-	  .meta.skip_if.no_ip_request = true },
-	{ .func = HUBP_PG_CONTROL },
-	{ .func = HUBP_RESET },
-	{ .func = DPP_RESET },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
-	  .meta.skip_if.no_ip_request = true },
 };
 
 static const struct dcn401_commit_step stream_off[] = {
@@ -267,7 +254,7 @@ static const struct dcn401_commit_step stream_off[] = {
 };
 
 /*
- * Net effect: enable the stream of the new state. Between the BIOS
+ * Net effect: enable each stream of the new state. Between the BIOS
  * critical-state calls:
  * - dcn401_enable_stream_timing plus the dce110_apply_single_controller
  *   calls around it, up to the DIG connect.
@@ -378,16 +365,13 @@ static const struct dcn401_commit_step postamble[] = {
 	  .meta.clk_mgr_update_clocks_for_state.safe_to_lower = true },
 };
 
-/*
- * Bounds on what build adds. The support check allows one stream per
- * state, and never one in both.
- */
+/* Bounds on what build adds for one stream in either state. */
 static_assert(ARRAY_SIZE(prepare_bandwidth) +
 		ARRAY_SIZE(lock) +
 		DCN401_MAX_OPP_HEADS * ARRAY_SIZE(blank) +
-		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(disconnect) +
+		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(dcn401_disconnect) +
 		ARRAY_SIZE(unlock) +
-		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(power_down) +
+		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(dcn401_power_down) +
 		ARRAY_SIZE(stream_off) +
 		ARRAY_SIZE(postamble) <=
 		DC2_BLS_MAX_STEPS,
@@ -417,14 +401,14 @@ static const struct dcn401_sub_sequence bls_head[] = {
 	  .steps = blank,
 	  .count = ARRAY_SIZE(blank) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
-	  .steps = disconnect,
-	  .count = ARRAY_SIZE(disconnect) },
+	  .steps = dcn401_disconnect,
+	  .count = ARRAY_SIZE(dcn401_disconnect) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = unlock,
 	  .count = ARRAY_SIZE(unlock) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
-	  .steps = power_down,
-	  .count = ARRAY_SIZE(power_down) },
+	  .steps = dcn401_power_down,
+	  .count = ARRAY_SIZE(dcn401_power_down) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = stream_off,
 	  .count = ARRAY_SIZE(stream_off) },
@@ -455,6 +439,9 @@ static const struct dcn401_sub_sequence bls_head[] = {
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = front_end,
 	  .count = ARRAY_SIZE(front_end) },
+};
+
+static const struct dcn401_sub_sequence bls_postamble[] = {
 	{ .flags = DCN401_NEW_STATE,
 	  .steps = postamble,
 	  .count = ARRAY_SIZE(postamble) },
@@ -466,16 +453,31 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 	struct dcn401_commit_step_args state_args;
 	struct block_sequence_state head;
 	enum bls_builder_result result;
+	unsigned int i;
 
 	if (!params)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
 	result = dcn401_check_non_seamless_commit_support(params->dc,
-			params->current_state, params->new_state);
+			params->current_state, params->new_state,
+			params->update_flags);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
 	dcn401_init_and_unpack_params(params, &state_args, &head);
 	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_head);
+	for (i = 0; i < state_args.new_state->stream_count; i++) {
+		state_args.stream = state_args.new_state->streams[i];
+		if (!dcn401_stream_kept(params->dc, params->current_state,
+				params->new_state, state_args.stream))
+			continue;
+		state_args.stream_unchanged = dcn401_stream_unchanged(
+				params->current_state, params->new_state,
+				state_args.stream);
+		dcn401_add_stream_update(&head, &state_args);
+	}
+	state_args.stream = NULL;
+	state_args.stream_unchanged = false;
+	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_postamble);
 
 	return BLS_BUILD_SUCCESS;
 }
@@ -484,7 +486,8 @@ static bool dcn401_non_seamless_commit_check_capability(
 		const struct bls_builder_check_capability_params *params)
 {
 	return params && dcn401_check_non_seamless_commit_support(params->dc,
-			params->current_state, params->new_state) ==
+			params->current_state, params->new_state,
+			params->update_flags) ==
 			BLS_BUILD_SUCCESS;
 }
 

@@ -47,7 +47,7 @@ static int rcar_du_wb_conn_get_modes(struct drm_connector *connector)
 				    dev->mode_config.max_height);
 }
 
-static int rcar_du_wb_prepare_job(struct drm_writeback_connector *connector,
+static int rcar_du_wb_prepare_job(struct drm_connector *connector,
 				  struct drm_writeback_job *job)
 {
 	struct rcar_du_crtc *rcrtc = wb_to_rcar_crtc(connector);
@@ -72,7 +72,7 @@ static int rcar_du_wb_prepare_job(struct drm_writeback_connector *connector,
 	return 0;
 }
 
-static void rcar_du_wb_cleanup_job(struct drm_writeback_connector *connector,
+static void rcar_du_wb_cleanup_job(struct drm_connector *connector,
 				   struct drm_writeback_job *job)
 {
 	struct rcar_du_crtc *rcrtc = wb_to_rcar_crtc(connector);
@@ -202,7 +202,7 @@ static const u32 writeback_formats[] = {
 int rcar_du_writeback_init(struct rcar_du_device *rcdu,
 			   struct rcar_du_crtc *rcrtc)
 {
-	struct drm_writeback_connector *wb_conn = &rcrtc->writeback;
+	struct drm_connector *connector = &rcrtc->wb_connector;
 	struct drm_encoder *encoder = &rcrtc->encoder;
 	int ret;
 
@@ -214,10 +214,9 @@ int rcar_du_writeback_init(struct rcar_du_device *rcdu,
 	if (ret)
 		return ret;
 
-	drm_connector_helper_add(&wb_conn->base,
+	drm_connector_helper_add(connector,
 				 &rcar_du_wb_conn_helper_funcs);
-
-	ret = drm_writeback_connector_init(&rcdu->ddev, wb_conn,
+	ret = drm_writeback_connector_init(&rcdu->ddev, connector,
 					   &rcar_du_wb_conn_funcs,
 					   encoder,
 					   writeback_formats,
@@ -237,7 +236,7 @@ void rcar_du_writeback_setup(struct rcar_du_crtc *rcrtc,
 	struct drm_framebuffer *fb;
 	unsigned int i;
 
-	state = rcrtc->writeback.base.state;
+	state = rcrtc->wb_connector.state;
 	if (!state || !state->writeback_job)
 		return;
 
@@ -252,10 +251,10 @@ void rcar_du_writeback_setup(struct rcar_du_crtc *rcrtc,
 		cfg->mem[i] = sg_dma_address(rjob->sg_tables[i].sgl)
 			    + fb->offsets[i];
 
-	drm_writeback_queue_job(&rcrtc->writeback, state);
+	drm_writeback_queue_job(&rcrtc->wb_connector, state);
 }
 
 void rcar_du_writeback_complete(struct rcar_du_crtc *rcrtc)
 {
-	drm_writeback_signal_completion(&rcrtc->writeback, 0);
+	drm_writeback_signal_completion(&rcrtc->wb_connector, 0);
 }

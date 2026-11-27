@@ -52,7 +52,7 @@ komeda_wb_encoder_atomic_check(struct drm_encoder *encoder,
 		return -EINVAL;
 	}
 
-	wb_layer = to_kconn(to_wb_conn(conn_st->connector))->wb_layer;
+	wb_layer = to_kconn(conn_st->connector)->wb_layer;
 
 	/*
 	 * No need for a full modested when the only connector changed is the
@@ -124,7 +124,7 @@ komeda_wb_connector_fill_modes(struct drm_connector *connector,
 static void komeda_wb_connector_destroy(struct drm_connector *connector)
 {
 	drm_connector_cleanup(connector);
-	kfree(to_kconn(to_wb_conn(connector)));
+	kfree(to_kconn(connector));
 }
 
 static const struct drm_encoder_funcs komeda_wb_encoder_funcs = {
@@ -145,7 +145,6 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 {
 	struct komeda_dev *mdev = kms->base.dev_private;
 	struct komeda_wb_connector *kwb_conn;
-	struct drm_writeback_connector *wb_conn;
 	struct drm_display_info *info;
 	struct drm_encoder *encoder;
 	struct drm_encoder *wb_encoder;
@@ -163,8 +162,6 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 		return -ENOMEM;
 
 	kwb_conn->wb_layer = kcrtc->master->wb_layer;
-
-	wb_conn = &kwb_conn->base;
 
 	formats = komeda_get_layer_fourcc_list(&mdev->fmt_tbl,
 					       kwb_conn->wb_layer->layer_type,
@@ -186,7 +183,7 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 		return err;
 	}
 
-	err = drm_writeback_connector_init(&kms->base, wb_conn,
+	err = drm_writeback_connector_init(&kms->base, &kwb_conn->base,
 					   &komeda_wb_connector_funcs,
 					   wb_encoder,
 					   formats, n_formats);
@@ -223,9 +220,9 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 					    drm_encoder_mask(wb_encoder);
 	}
 
-	drm_connector_helper_add(&wb_conn->base, &komeda_wb_conn_helper_funcs);
+	drm_connector_helper_add(&kwb_conn->base, &komeda_wb_conn_helper_funcs);
 
-	info = &kwb_conn->base.base.display_info;
+	info = &kwb_conn->base.display_info;
 	info->bpc = __fls(kcrtc->master->improc->supported_color_depths);
 	info->color_formats = kcrtc->master->improc->supported_color_formats;
 

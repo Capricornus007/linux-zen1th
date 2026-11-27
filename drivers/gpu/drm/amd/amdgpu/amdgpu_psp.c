@@ -296,6 +296,7 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 		psp->boot_time_tmr = false;
 		break;
 	case IP_VERSION(15, 0, 3):
+		adev->psp.sup_ifwi_up = !amdgpu_sriov_vf(adev);
 		psp_v15_0_3_set_psp_funcs(psp);
 		break;
 	case IP_VERSION(15, 0, 8):
@@ -4022,6 +4023,16 @@ static int psp_load_smu_fw(struct psp_context *psp)
 static bool fw_load_skip_check(struct psp_context *psp,
 			       struct amdgpu_firmware_info *ucode)
 {
+	struct amdgpu_device *adev = psp->adev;
+	/* Keep IMU firmware loading enabled for APUs with GC IP 11.0.0-11.7.1. */
+	if ((adev->flags & AMD_IS_APU) &&
+	    (amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(11, 0, 0)
+	    && amdgpu_ip_version(adev, GC_HWIP, 0) <= IP_VERSION(11, 7, 1))) {
+		if (!ucode->fw && (ucode->ucode_id == AMDGPU_UCODE_ID_IMU_I ||
+		    ucode->ucode_id == AMDGPU_UCODE_ID_IMU_D))
+			return false;
+	}
+
 	if (!ucode->fw || !ucode->ucode_size)
 		return true;
 
@@ -4514,6 +4525,9 @@ int psp_ring_cmd_submit(struct psp_context *psp,
 /**
  * parse_psp_v1_bin_descriptor - Populate struct psp_bin_desc from a
  * v1.0 PSP firmware header (standalone images such as ASD or TOC).
+ * @desc: the descriptor to populate
+ * @hdr: the firmware header to read
+ * Return: 0 on success, -EINVAL if either argument is NULL.
  */
 static int parse_psp_v1_bin_descriptor(struct psp_bin_desc *desc,
 					const struct psp_firmware_header_v1_0 *hdr)

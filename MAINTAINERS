@@ -810,6 +810,13 @@ F:	Documentation/devicetree/bindings/sound/airoha,an7581-afe.yaml
 F:	Documentation/devicetree/bindings/sound/airoha,an7581-wm8960.yaml
 F:	sound/soc/mediatek/an7581/*
 
+AIROHA PCM CONTROLLER DRIVER
+M:	Christian Marangi <ansuelsmth@gmail.com>
+L:	linux-sound@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/sound/airoha,an7581-pcm.yaml
+F:	sound/soc/airoha/*
+
 AIROHA SPI SNFI DRIVER
 M:	Lorenzo Bianconi <lorenzo@kernel.org>
 M:	Ray Liu <ray.liu@airoha.com>
@@ -3077,14 +3084,6 @@ S:	Maintained
 T:	git git://git.berlios.de/gemini-board
 F:	arch/arm/mm/*-fa*
 
-ARM/FOOTBRIDGE ARCHITECTURE
-M:	Russell King <linux@armlinux.org.uk>
-L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
-S:	Maintained
-W:	http://www.armlinux.org.uk/
-F:	arch/arm/include/asm/hardware/dec21285.h
-F:	arch/arm/mach-footbridge/
-
 ARM/FREESCALE IMX / MXC / LAYERSCAPE ARM ARCHITECTURE
 M:	Frank Li <Frank.Li@nxp.com>
 M:	Sascha Hauer <s.hauer@pengutronix.de>
@@ -3129,14 +3128,6 @@ T:	git https://github.com/hisilicon/linux-hisi.git
 F:	arch/arm/boot/dts/hisilicon/
 F:	arch/arm/mach-hisi/
 F:	arch/arm64/boot/dts/hisilicon/
-
-ARM/HP JORNADA 7XX MACHINE SUPPORT
-M:	Kristoffer Ericson <kristoffer.ericson@gmail.com>
-S:	Maintained
-W:	www.jlime.com
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kristoffer/linux-hpc.git
-F:	arch/arm/mach-sa1100/include/mach/jornada720.h
-F:	arch/arm/mach-sa1100/jornada720.c
 
 ARM/HPE GXP ARCHITECTURE
 M:	Jean-Marie Verdun <verdun@hpe.com>
@@ -3207,18 +3198,6 @@ L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
 F:	arch/arm64/boot/dts/lg/
 
-ARM/LPC18XX ARCHITECTURE
-M:	Vladimir Zapolskiy <vz@mleia.com>
-L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
-S:	Maintained
-F:	Documentation/devicetree/bindings/i2c/nxp,lpc1788-i2c.yaml
-F:	arch/arm/boot/dts/nxp/lpc/lpc43*
-F:	drivers/i2c/busses/i2c-lpc2k.c
-F:	drivers/memory/pl172.c
-F:	drivers/mtd/spi-nor/controllers/nxp-spifi.c
-F:	drivers/rtc/rtc-lpc24xx.c
-N:	lpc18xx
-
 ARM/LPC32XX SOC SUPPORT
 M:	Vladimir Zapolskiy <vz@mleia.com>
 M:	Piotr Wojtaszczyk <piotr.wojtaszczyk@timesys.com>
@@ -3255,10 +3234,7 @@ F:	Documentation/devicetree/bindings/arm/marvell/marvell,orion5x.yaml
 F:	Documentation/devicetree/bindings/soc/dove/
 F:	arch/arm/boot/dts/marvell/dove*
 F:	arch/arm/boot/dts/marvell/orion5x*
-F:	arch/arm/mach-dove/
-F:	arch/arm/mach-mv78xx0/
 F:	arch/arm/mach-orion5x/
-F:	arch/arm/plat-orion/
 F:	drivers/bus/mvebu-mbus.c
 F:	drivers/soc/dove/
 
@@ -3532,13 +3508,6 @@ R:	s32@nxp.com
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/nxp,s32-dwmac.yaml
 F:	drivers/net/ethernet/stmicro/stmmac/dwmac-s32.c
-
-ARM/Orion SoC/Technologic Systems TS-78xx platform support
-M:	Alexander Clouter <alex@digriz.org.uk>
-L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
-S:	Maintained
-W:	http://www.digriz.org.uk/ts78xx/kernel
-F:	arch/arm/mach-orion5x/ts78xx-*
 
 ARM/QUALCOMM CHROMEBOOK SUPPORT
 R:	cros-qcom-dts-watchers@chromium.org
@@ -7488,25 +7457,6 @@ M:	Michał Kopeć <michal.kopec@3mdeb.com>
 S:	Maintained
 W:	https://docs.dasharo.com/
 F:	drivers/platform/x86/dasharo-acpi.c
-
-DAMON
-M:	SJ Park <sj@kernel.org>
-L:	damon@lists.linux.dev
-L:	linux-mm@kvack.org
-S:	Maintained
-W:	https://damonitor.github.io
-P:	Documentation/mm/damon/maintainer-profile.rst
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/akpm/mm
-T:	quilt git://git.kernel.org/pub/scm/linux/kernel/git/akpm/25-new
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/sj/linux.git damon/next
-F:	Documentation/ABI/testing/sysfs-kernel-mm-damon
-F:	Documentation/admin-guide/mm/damon/
-F:	Documentation/mm/damon/
-F:	include/linux/damon.h
-F:	include/trace/events/damon.h
-F:	mm/damon/
-F:	samples/damon/
-F:	tools/testing/selftests/damon/
 
 DAVICOM FAST ETHERNET (DMFE) NETWORK DRIVER
 L:	netdev@vger.kernel.org
@@ -14558,12 +14508,18 @@ M:	Pratyush Yadav <pratyush@kernel.org>
 L:	kexec@lists.infradead.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
+F:	Documentation/ABI/obsolete/sysfs-kernel-kexec-kdump
+F:	Documentation/ABI/testing/sysfs-kernel-kexec-kdump
+F:	Documentation/ABI/testing/sysfs-kernel-vmcoreinfo
 F:	Documentation/admin-guide/kdump/
 F:	fs/proc/vmcore.c
 F:	include/linux/crash_core.h
 F:	include/linux/crash_dump.h
+F:	include/linux/crash_reserve.h
+F:	include/linux/vmcore_info.h
 F:	include/uapi/linux/vmcore.h
 F:	kernel/crash_*.c
+F:	kernel/vmcore_info.c
 
 KEENE FM RADIO TRANSMITTER DRIVER
 M:	Hans Verkuil <hverkuil@kernel.org>
@@ -14920,9 +14876,14 @@ M:	Pratyush Yadav <pratyush@kernel.org>
 L:	kexec@lists.infradead.org
 W:	http://kernel.org/pub/linux/utils/kernel/kexec/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
+F:	drivers/of/kexec.c
 F:	include/linux/kexec.h
+F:	include/linux/purgatory.h
 F:	include/uapi/linux/kexec.h
+F:	kernel/Kconfig.kexec
+F:	kernel/irq/kexec.c
 F:	kernel/kexec*
+F:	tools/testing/selftests/kexec/
 
 KEXEC HANDOVER (KHO)
 M:	Mike Rapoport <rppt@kernel.org>
@@ -14935,11 +14896,14 @@ S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
 F:	Documentation/admin-guide/mm/kho.rst
 F:	Documentation/core-api/kho/*
+F:	drivers/of/kexec.c
 F:	include/asm-generic/kexec_handover.h
 F:	include/linux/kexec_handover.h
 F:	include/linux/kho/
 F:	include/linux/kho_block.h
+F:	include/linux/kho_radix_tree.h
 F:	kernel/liveupdate/kexec_handover*
+F:	kernel/liveupdate/kho_block.c
 F:	lib/test_kho.c
 F:	tools/testing/selftests/kho/
 
@@ -17702,6 +17666,23 @@ F:	mm/vmstat.c
 F:	scripts/gdb/linux/mm.py
 N:	include\/linux\/page[-_][a-zA-Z]*
 
+MEMORY MANAGEMENT - DAMON
+M:	SJ Park <sj@kernel.org>
+L:	damon@lists.linux.dev
+L:	linux-mm@kvack.org
+S:	Maintained
+W:	https://damonitor.github.io
+P:	Documentation/mm/damon/maintainer-profile.rst
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mm/damon.git for-next
+F:	Documentation/ABI/testing/sysfs-kernel-mm-damon
+F:	Documentation/admin-guide/mm/damon/
+F:	Documentation/mm/damon/
+F:	include/linux/damon.h
+F:	include/trace/events/damon.h
+F:	mm/damon/
+F:	samples/damon/
+F:	tools/testing/selftests/damon/
+
 MEMORY MANAGEMENT - EXECMEM
 M:	Andrew Morton <akpm@linux-foundation.org>
 M:	Mike Rapoport <rppt@kernel.org>
@@ -19074,6 +19055,7 @@ M:	David Yang <mmyangfl@gmail.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/dsa/motorcomm,yt921x.yaml
+F:	Documentation/networking/devlink/yt921x.rst
 F:	drivers/net/dsa/motorcomm/
 F:	net/dsa/tag_yt921x.c
 
@@ -20655,7 +20637,6 @@ M:	Jarkko Nikula <jarkko.nikula@bitmer.com>
 L:	linux-sound@vger.kernel.org
 L:	linux-omap@vger.kernel.org
 S:	Maintained
-F:	sound/soc/ti/n810.c
 F:	sound/soc/ti/omap*
 F:	sound/soc/ti/rx51.c
 F:	sound/soc/ti/sdma-pcm.*
@@ -20695,7 +20676,6 @@ M:	Roger Quadros <rogerq@kernel.org>
 M:	Tony Lindgren <tony@atomide.com>
 L:	linux-omap@vger.kernel.org
 S:	Maintained
-F:	arch/arm/mach-omap2/*gpmc*
 F:	drivers/memory/omap-gpmc.c
 
 OMAP GPIO DRIVER

@@ -30,7 +30,7 @@
  * directly from connected receivers.
  */
 
-#include "link_dpms.h"
+#include "link_dpms_v1.h"
 #include "link_detection.h"
 #include "link_hwss.h"
 #include "protocols/link_edp_panel_control.h"
@@ -1153,11 +1153,16 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 		(!link->dc->config.allow_edp_hotplug_detection)) &&
 		link->local_sink) {
 		// need to re-write OUI and brightness in resume case
-		if (link->connector_signal == SIGNAL_TYPE_EDP &&
-			(link->dpcd_sink_ext_caps.bits.oled == 1)) {
-			dpcd_set_source_specific_data(link);
-			msleep(post_oui_delay);
-			set_default_brightness_aux(link);
+		if (link->connector_signal == SIGNAL_TYPE_EDP) {
+			if (!link->dc->config.edp_no_power_sequencing)
+				link->dc->hwss.edp_power_control(link, true);
+			link->dc->hwss.edp_wait_for_hpd_ready(link, true);
+
+			if (link->dpcd_sink_ext_caps.bits.oled == 1) {
+				dpcd_set_source_specific_data(link);
+				msleep(post_oui_delay);
+				set_default_brightness_aux(link);
+			}
 		}
 
 		return true;
