@@ -105,9 +105,12 @@ jobs:
           make_netdiff xanmod/7.3     stable/linux-7.3.y    /tmp/xan.diff || { echo "::error::xanmod 差量計算失敗"; exit 1; }
 
           apply_diff() { # $1=檔 $2=名稱 $3=required(yes/no)
-            # yes：任一衝突即紅（缺了會開不了機/丟特性）。
-            # no ：最佳努力層（第三方 sauce 對 next 基座必然漂移）——能套的全套，
-            #      衝突檔記清單＋::warning:: 後繼續；清單照常推 zen1th-conflicts 分支。
+            # 2026-11-28：取消 best-effort 降級。任何層（含 xanmod）只要有衝突就
+            # ::error:: + exit 1。舊版把 xanmod 當 best-effort 只發 ::warning::，
+            # 結果 job 顯示 success、衝突被無聲吞掉（run 45971720912 明明有 1 檔
+            # 沒套上卻整趟綠燈，天天沒人發現）。清單照樣推 zen1th-conflicts 分支
+            # 供事後修理，但 CI 必須先紅，修到能乾淨套用為止。
+            # $3 現在只控 include/ 標頭的「整層回退」策略，不再影響成敗判定。
             if [ ! -s "$1" ]; then echo "$2：差量為空（fork 無自有修改），跳過"; return 0; fi
             if git apply --check --3way "$1" 2>/dev/null; then
               git apply --3way "$1" && git add -A && git commit -qm "$2（差量乾淨）"; return
@@ -146,7 +149,7 @@ jobs:
             # 回退 → implicit declaration of tcp_set_ecn_low_from_dst，全速編到 74% 才炸）。
             # 這種情況整層回退，寧可全丟這層 sauce 也不留半套。
             if [ "$ok" = 0 ] && [ "$3" = no ] && [ -s /tmp/conf_include.txt ]; then
-              echo "::warning::$2 衝突含 include/ 標頭（$(wc -l < /tmp/conf_include.txt) 個）→ 整層回退（半套標頭編譯必炸）"
+              echo "::notice::$2 衝突含 include/ 標頭（$(wc -l < /tmp/conf_include.txt) 個）→ 整層回退（半套標頭編譯必炸；稍後仍以 ::error:: 紅掉）"
               git reset --hard -q HEAD
               # 只清 HEAD 裡沒有的新增檔；HEAD 既有檔 reset 後就是基座版，絕不能 rm。
               while IFS= read -r f; do
@@ -156,10 +159,7 @@ jobs:
               git add -A; git commit -qm "$2（逐檔套用 $n_apply 檔）" || true
             fi
             if [ "$ok" = 0 ]; then
-              if [ "$3" = yes ]; then
-                echo "::error::$2 有 $n_fail 個衝突檔（清單見 zen1th-conflicts 分支）"; exit 1
-              fi
-              echo "::warning::$2 有 $n_fail 個衝突檔未套用（best-effort 層；清單見 zen1th-conflicts 分支）"
+              echo "::error::$2 有 $n_fail 個衝突檔未套用（清單見 zen1th-conflicts 分支）；衝突不再當警告放過，必須修到能乾淨套用"; exit 1
             fi
           }
           # BORE：若 zen/xanmod 差量已帶來 SCHED_BORE 就不再疊 CachyOS 補丁（避免重複定義）
